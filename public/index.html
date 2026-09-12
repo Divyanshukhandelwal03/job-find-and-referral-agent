@@ -1,0 +1,928 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Happpy Agent - Local AI Job Referral & Outreach Platform</title>
+  <meta name="description" content="Local single-user AI Job Referral & Cold Outreach agent powered by Gemini. Matches your resume, discovers referral targets, and automates outreach from personal Gmail." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- Background Glow Accents -->
+  <div class="bg-glow bg-glow-1"></div>
+  <div class="bg-glow bg-glow-2"></div>
+
+  <!-- App Header -->
+  <header class="app-header">
+    <div class="header-left">
+      <div class="brand-logo">
+        <span class="logo-symbol">⚡</span>
+        <span class="logo-title">Happpy<span class="highlight">Agent</span></span>
+      </div>
+      <span class="badge badge-local">Local Mode</span>
+    </div>
+
+    <div class="header-center">
+      <nav class="nav-tabs">
+        <button class="nav-tab active" data-tab="radar-tab">
+          <span class="tab-icon">🌐</span> Worldwide Job Radar
+        </button>
+        <button class="nav-tab" data-tab="jobs-tab">
+          <span class="tab-icon">🎯</span> Tracked Pipeline
+        </button>
+        <button class="nav-tab" data-tab="profile-tab">
+          <span class="tab-icon">📄</span> Resume & Profile
+        </button>
+        <button class="nav-tab" data-tab="outreach-tab">
+          <span class="tab-icon">✉️</span> Outreach & Replies
+        </button>
+        <button class="nav-tab" data-tab="settings-tab">
+          <span class="tab-icon">⚙️</span> Settings & Gmail
+        </button>
+      </nav>
+    </div>
+
+    <div class="header-right">
+      <div class="status-pill" id="gmail-status-pill">
+        <span class="status-dot"></span>
+        <span id="gmail-status-text">Gmail Linked</span>
+      </div>
+      <div class="status-pill" id="system-status-pill">
+        <span class="status-dot"></span>
+        <span id="gemini-status-text">Gemini Active</span>
+      </div>
+      <button class="btn btn-primary" id="btn-open-add-job">
+        <span>+ Add Custom Job</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <main class="app-main">
+
+    <!-- TAB 1: WORLDWIDE JOB RADAR -->
+    <section id="radar-tab" class="tab-content active">
+      <!-- Profile Radar Match Banner -->
+      <div class="radar-hero-banner">
+        <div class="radar-hero-info">
+          <div class="radar-hero-tag">⚡ Worldwide Job Discovery & Matching Engine</div>
+          <h2 id="radar-hero-headline">Scanning Global Openings for Your Profile</h2>
+          <p id="radar-hero-sub" class="text-muted text-sm">
+            Parses your resume to identify your field, experience range, and tech stack across LinkedIn, company career portals, and HR postings.
+          </p>
+          <div class="radar-profile-badges mt-2" id="radar-profile-badges">
+            <span class="badge badge-pill" id="badge-radar-field">Field: Full-Stack / Backend</span>
+            <span class="badge badge-pill" id="badge-radar-exp">Experience: 3-5 Years</span>
+            <span class="badge badge-pill" id="badge-radar-stack">Stack: Node.js, React, PostgreSQL</span>
+          </div>
+        </div>
+        <div class="radar-hero-actions">
+          <button class="btn btn-accent btn-lg" id="btn-scan-profile-jobs">
+            <span>🚀 Scan Worldwide Jobs for My Profile</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Quick Import Direct Link / Google Form Bar -->
+      <div class="radar-import-bar mt-3">
+        <div class="import-input-wrap">
+          <span class="import-icon">🔗</span>
+          <input type="url" id="direct-job-url-input" placeholder="Paste any LinkedIn job URL, HR Google Form link, or company portal (Lever/Greenhouse)..." />
+        </div>
+        <button class="btn btn-secondary" id="btn-import-direct-url">
+          <span>⚡ Import & Auto-Match</span>
+        </button>
+      </div>
+
+      <!-- Search & Multi-Filters Toolbar -->
+      <div class="radar-filters-panel mt-3">
+        <div class="filter-row-primary">
+          <div class="search-box">
+            <span class="search-icon">🔍</span>
+            <input type="text" id="radar-search-input" placeholder="Job title, keywords (e.g. Node.js, React, Distributed Systems)..." />
+          </div>
+
+          <div class="search-box" style="max-width: 260px;">
+            <span class="search-icon">🏢</span>
+            <input type="text" id="radar-company-input" placeholder="Company or ID (e.g. Google, 1441)..." />
+          </div>
+
+          <div class="filter-select-wrap">
+            <span class="filter-icon">📍</span>
+            <select id="radar-location-select" class="custom-select">
+              <option value="Worldwide">🌍 Worldwide (Any Location)</option>
+              <option value="Remote">🏠 100% Remote Anywhere</option>
+              <option value="India">🇮🇳 India (Bengaluru, NCR, Remote)</option>
+              <option value="United States">🇺🇸 United States</option>
+              <option value="United Kingdom">🇬🇧 United Kingdom</option>
+              <option value="Germany">🇩🇪 Germany / Europe</option>
+              <option value="Canada">🇨🇦 Canada</option>
+              <option value="Singapore">🇸🇬 Singapore / APAC</option>
+            </select>
+          </div>
+
+          <div class="filter-select-wrap">
+            <span class="filter-icon">💼</span>
+            <select id="radar-exp-select" class="custom-select">
+              <option value="all">All Experience Levels</option>
+              <option value="entry">Entry-Level (0 - 2 yrs)</option>
+              <option value="mid">Mid-Level (2 - 5 yrs)</option>
+              <option value="senior">Senior (4 - 8+ yrs)</option>
+              <option value="lead">Lead / Staff (8+ yrs)</option>
+            </select>
+          </div>
+
+          <button class="btn btn-primary" id="btn-radar-apply-filters">
+            <span>Filter Radar</span>
+          </button>
+        </div>
+
+        <div class="filter-row-toggles mt-2">
+          <label class="toggle-pill" style="border-color: rgba(99, 102, 241, 0.4); background: rgba(99, 102, 241, 0.08);">
+            <input type="checkbox" id="radar-toggle-forms" />
+            <span class="toggle-label" style="font-weight: 600; color: #a5b4fc;">📝 Recruiter Posts + Google Forms</span>
+          </label>
+
+          <label class="toggle-pill">
+            <input type="checkbox" id="radar-toggle-visa" />
+            <span class="toggle-label">✈️ Visa Sponsorship Abroad (Excl. India)</span>
+          </label>
+
+          <label class="toggle-pill">
+            <input type="checkbox" id="radar-toggle-remote" />
+            <span class="toggle-label">🌐 Remote Only</span>
+          </label>
+
+          <div class="source-filter-wrap">
+            <span class="text-xs text-muted">Source:</span>
+            <select id="radar-source-select" class="custom-select-sm">
+              <option value="all">All 10+ Worldwide Sources (1,000+ Jobs)</option>
+              <option value="google_form">📝 Recruiter Posts (Google Form Attached)</option>
+              <option value="linkedin_company">🏢 LinkedIn Company Jobs (Official ID Postings)</option>
+              <option value="linkedin">💼 LinkedIn Live Guest</option>
+              <option value="arbeitnow">🌍 Arbeitnow (Visa & Relocation)</option>
+              <option value="himalayas">🏔️ Himalayas (Remote & Salary)</option>
+              <option value="weworkremotely">💻 WeWorkRemotely (Full-Stack/Backend)</option>
+              <option value="remoteok">🚀 RemoteOK (Global Tech)</option>
+              <option value="jobicy">🌐 Jobicy Worldwide</option>
+              <option value="workingnomads">🏕️ WorkingNomads</option>
+              <option value="hn_hiring">⚡ Hacker News (Direct Managers)</option>
+              <option value="euremotejobs">🇪🇺 EuRemoteJobs</option>
+              <option value="remotive">🎯 Remotive (Dev Feed)</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- Radar Discovered Jobs Grid -->
+      <div class="radar-results-header flex-between mt-4">
+        <div>
+          <h3 id="radar-results-title">Discovered Worldwide Opportunities</h3>
+          <span class="text-muted text-xs" id="radar-results-meta">Click "Scan Worldwide Jobs" to discover live openings</span>
+        </div>
+        <button class="btn btn-sm btn-outline" id="btn-refresh-radar">🔄 Refresh Radar</button>
+      </div>
+
+      <div id="radar-jobs-grid" class="radar-grid mt-3">
+        <!-- Dynamic radar cards render here -->
+        <div class="empty-state" id="radar-empty-state">
+          <div class="empty-icon">📡</div>
+          <h3>Worldwide Radar Ready</h3>
+          <p>Click "Scan Worldwide Jobs for My Profile" above or apply filters to discover open roles from LinkedIn, career portals, and Arbeitnow.</p>
+          <button class="btn btn-primary mt-3" onclick="scanWorldwideJobsForProfile()">🚀 Scan Now</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 2: JOBS PIPELINE -->
+    <section id="jobs-tab" class="tab-content">
+      <!-- Stats Overview Bar -->
+      <div class="stats-row">
+        <div class="stat-card">
+          <span class="stat-label">Tracked Jobs</span>
+          <span class="stat-value" id="stat-total-jobs">0</span>
+          <span class="stat-meta">In local database</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">Analyzed by AI</span>
+          <span class="stat-value" id="stat-analyzed-jobs">0</span>
+          <span class="stat-meta">Match score evaluated</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">Outreach Emails Sent</span>
+          <span class="stat-value" id="stat-emails-sent">0</span>
+          <span class="stat-meta">Via personal Gmail</span>
+        </div>
+        <div class="stat-card stat-accent">
+          <span class="stat-label">Replies & Referrals</span>
+          <span class="stat-value" id="stat-replies-received">0</span>
+          <span class="stat-meta">Responses recorded</span>
+        </div>
+      </div>
+
+      <!-- Controls & Filter Bar -->
+      <div class="section-toolbar">
+        <div class="search-box">
+          <span class="search-icon">🔍</span>
+          <input type="text" id="job-search-input" placeholder="Search by job title, company, or skills..." />
+        </div>
+        <div class="toolbar-actions" style="display: flex; gap: 10px; align-items: center;">
+          <select id="job-status-filter" class="custom-select">
+            <option value="all">All Statuses</option>
+            <option value="saved">Saved (New)</option>
+            <option value="analyzed">Analyzed</option>
+            <option value="contact_found">Contact Found</option>
+            <option value="outreach_sent">Outreach Sent</option>
+            <option value="replied">Replied</option>
+          </select>
+          <button class="btn btn-outline-danger btn-sm" id="btn-clear-pipeline" title="Clear all tracked jobs, contacts, and outreach from the local database">
+            <span>🗑️ Clear Tracked Pipeline</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Jobs Grid / List -->
+      <div id="jobs-container" class="jobs-grid">
+        <!-- Dynamic job cards will render here -->
+        <div class="empty-state" id="jobs-empty-state">
+          <div class="empty-icon">📂</div>
+          <h3>No jobs added yet</h3>
+          <p>Add your first target role by pasting a job description or URL to see AI match scoring and start referral outreach.</p>
+          <button class="btn btn-primary mt-3" onclick="openAddJobModal()">+ Add Your First Job</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 2: RESUME & PROFILE -->
+    <section id="profile-tab" class="tab-content">
+      <div class="profile-layout">
+        <!-- Resume Upload Card -->
+        <div class="card profile-upload-card">
+          <div class="card-header">
+            <h3>Master Resume & Profile Intelligence</h3>
+            <p class="text-muted">Upload your resume PDF to let Gemini AI extract your skills, target roles, and tailored pitch points.</p>
+          </div>
+
+          <div class="upload-dropzone" id="resume-dropzone">
+            <input type="file" id="resume-file-input" accept=".pdf,.txt,.docx" hidden />
+            <div class="dropzone-content">
+              <span class="upload-icon">📄</span>
+              <h4>Drag & drop your Resume PDF here</h4>
+              <p>or <button type="button" class="link-btn" onclick="document.getElementById('resume-file-input').click()">browse your local files</button></p>
+              <span class="upload-hint">Supports PDF, TXT (up to 10MB)</span>
+            </div>
+            <div id="upload-spinner" class="spinner-overlay hidden">
+              <div class="spinner"></div>
+              <span>Gemini AI is parsing and indexing your career history...</span>
+            </div>
+          </div>
+
+          <div class="resume-file-info hidden" id="current-resume-pill">
+            <span class="file-icon">📎</span>
+            <div class="file-details">
+              <strong id="current-resume-name">resume.pdf</strong>
+              <span class="text-xs text-muted" id="current-resume-status">Attached & Ready to Send</span>
+            </div>
+            <div class="btn-group">
+              <button type="button" class="btn btn-sm btn-outline" onclick="document.getElementById('resume-file-input').click()">🔄 Replace Resume</button>
+              <button type="button" class="btn btn-sm btn-outline text-rose" id="btn-delete-resume" onclick="handleDeleteCurrentResume()">🗑️ Delete Resume</button>
+            </div>
+          </div>
+
+          <!-- Or Paste Raw Text -->
+          <details class="paste-text-collapsible mt-4">
+            <summary>Or paste raw resume text manually</summary>
+            <div class="paste-area-box mt-2">
+              <textarea id="raw-resume-text" rows="6" placeholder="Paste plain text of your resume here..."></textarea>
+              <button class="btn btn-secondary btn-sm mt-2" id="btn-parse-text">Analyze Raw Text with AI</button>
+            </div>
+          </details>
+        </div>
+
+        <!-- Parsed Profile Details Card -->
+        <div class="card profile-details-card">
+          <div class="card-header flex-between">
+            <div>
+              <h3 id="profile-name">Candidate Name</h3>
+              <p class="text-muted" id="profile-headline">Add your resume to generate title & headline</p>
+            </div>
+            <button class="btn btn-outline btn-sm" id="btn-save-profile">Save Profile Changes</button>
+          </div>
+
+          <div class="form-grid">
+            <div class="form-group">
+              <label>Full Name</label>
+              <input type="text" id="prof-fullname" placeholder="e.g. Divyanshu Sharma" />
+            </div>
+            <div class="form-group">
+              <label>Email Address</label>
+              <input type="email" id="prof-email" placeholder="e.g. user@gmail.com" />
+            </div>
+            <div class="form-group full-width">
+              <label>Professional Headline</label>
+              <input type="text" id="prof-headline-input" placeholder="e.g. Senior Full-Stack Engineer | React, Node.js, AI Systems" />
+            </div>
+            <div class="form-group full-width">
+              <label>Executive Bio / Summary</label>
+              <textarea id="prof-summary" rows="3" placeholder="Brief summary of your professional journey and key impact..."></textarea>
+            </div>
+            <div class="form-group full-width">
+              <label>Extracted Skills</label>
+              <div class="skills-tag-cloud" id="skills-container">
+                <span class="text-muted text-sm">No skills extracted yet. Upload a resume above.</span>
+              </div>
+              <input type="text" id="add-skill-input" class="mt-2" placeholder="Type a skill and press Enter to add..." />
+            </div>
+            <div class="form-group full-width">
+              <label>Target Job Titles</label>
+              <div class="roles-tag-cloud" id="roles-container">
+                <span class="text-muted text-sm">e.g. Full Stack Developer, Backend Engineer</span>
+              </div>
+              <input type="text" id="add-role-input" class="mt-2" placeholder="Add target title and press Enter..." />
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: OUTREACH HISTORY -->
+    <section id="outreach-tab" class="tab-content">
+      <div class="card">
+        <div class="card-header flex-between">
+          <div>
+            <h3>Cold Referral Outreach & Inbox Responses</h3>
+            <p class="text-muted">Track emails sent directly from your Gmail, monitor incoming replies via IMAP, and revert with AI.</p>
+          </div>
+          <button class="btn btn-secondary" id="btn-check-replies">
+            <span>📥 Check Gmail Inbox for Replies</span>
+          </button>
+        </div>
+
+        <div class="table-responsive">
+          <table class="data-table" id="outreach-table">
+            <thead>
+              <tr>
+                <th>Recipient</th>
+                <th>Role & Company</th>
+                <th>Channel / Type</th>
+                <th>Subject</th>
+                <th>Sent Date</th>
+                <th>Status</th>
+                <th>Follow-up Due</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="outreach-tbody">
+              <!-- Dynamically rendered rows -->
+              <tr>
+                <td colspan="8" class="text-center py-4 text-muted">No outreach emails sent yet. Open any job to draft and send your first referral email!</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 4: SETTINGS & GMAIL -->
+    <section id="settings-tab" class="tab-content">
+      <div class="settings-layout">
+        <!-- Gmail Configuration Card -->
+        <div class="card">
+          <div class="card-header">
+            <h3>Personal Gmail Connection</h3>
+            <p class="text-muted">Configure your personal Gmail so the agent can send referral requests directly from your own inbox.</p>
+          </div>
+
+          <div class="alert alert-info">
+            <strong>💡 Fast 1-Minute Setup via Google App Password:</strong>
+            <ol class="setup-steps-list">
+              <li>Open your <a href="https://myaccount.google.com/security" target="_blank" rel="noopener">Google Account Security</a> settings.</li>
+              <li>Ensure <strong>2-Step Verification</strong> is ON.</li>
+              <li>Search for <strong>"App Passwords"</strong> (or visit <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener">myaccount.google.com/apppasswords</a>).</li>
+              <li>Create a new App Password named <code>Job Referral Agent</code>.</li>
+              <li>Paste the 16-character generated password below!</li>
+            </ol>
+          </div>
+
+          <form id="gmail-settings-form" class="mt-4">
+            <div class="form-group">
+              <label>Your Gmail Address</label>
+              <input type="email" id="setting-gmail-address" placeholder="e.g. yourname@gmail.com" required />
+            </div>
+            <div class="form-group">
+              <label>Google App Password (16 letters)</label>
+              <input type="password" id="setting-gmail-password" placeholder="xxxx xxxx xxxx xxxx" />
+              <span class="text-xs text-muted">Stored strictly in your local <code>data/db.json</code> on your machine.</span>
+            </div>
+            <div class="form-group">
+              <label>Sender Display Name</label>
+              <input type="text" id="setting-sender-name" placeholder="e.g. Divyanshu Sharma" />
+            </div>
+            <div class="form-group">
+              <label class="checkbox-label">
+                <input type="checkbox" id="setting-auto-attach-resume" checked />
+                <span>Automatically attach my master resume (PDF) to referral emails</span>
+              </label>
+            </div>
+            <div class="form-group">
+              <label>Default Follow-up Delay (Days)</label>
+              <input type="number" id="setting-followup-days" min="1" max="14" value="3" style="max-width: 120px;" />
+            </div>
+
+            <!-- Apollo.io API Integration -->
+            <div class="form-group mt-3 pt-3" style="border-top: 1px solid var(--border-color);">
+              <label class="flex-between">
+                <span>⚡ Apollo.io API Key (Requires Paid Plan or Trial for People Search)</span>
+                <span class="badge" id="badge-apollo-status" style="background: rgba(245,158,11,0.15); color: #f59e0b; font-size: 11px;">Not Configured</span>
+              </label>
+              <input type="password" id="setting-apollo-api-key" placeholder="Paste your Apollo.io API key (Master Key)" />
+              <div class="text-xs text-muted mt-1">
+                📌 <strong>Required Endpoints:</strong> <code>api/v1/mixed_people/api_search</code> and <code>api/v1/people/match</code>. Apollo requires any paid plan (Basic/Pro) or active trial to query employees via API.
+              </div>
+            </div>
+
+            <!-- Hunter.io 100% Free Option -->
+            <div class="form-group mt-3">
+              <label class="flex-between">
+                <span>🎯 Hunter.io API Key (100% Free Option — 25 Free Searches / Mo)</span>
+                <span class="badge" id="badge-hunter-status" style="background: rgba(245,158,11,0.15); color: #f59e0b; font-size: 11px;">Not Configured</span>
+              </label>
+              <input type="password" id="setting-hunter-api-key" placeholder="Paste your free Hunter.io API key" />
+              <div class="text-xs text-muted mt-1">
+                💡 <strong>Free Alternative:</strong> Hunter.io includes 25 free domain employee searches every month with zero credit card required. Sign up and grab your API key at <a href="https://hunter.io/api" target="_blank" rel="noopener" class="link-btn text-xs">hunter.io/api</a>.
+              </div>
+            </div>
+
+            <div class="btn-row mt-4 flex-between">
+              <div class="btn-group">
+                <button type="button" class="btn btn-secondary" id="btn-test-email">
+                  <span>🔌 Test Gmail Connection</span>
+                </button>
+                <button type="submit" class="btn btn-primary">
+                  <span>💾 Save Gmail Settings</span>
+                </button>
+              </div>
+              <button type="button" class="btn btn-outline text-rose" id="btn-disconnect-gmail" onclick="handleDisconnectGmail()">
+                <span>🗑️ Disconnect / Clear Gmail</span>
+              </button>
+            </div>
+            <div id="email-test-result" class="mt-3 hidden"></div>
+          </form>
+        </div>
+
+        <!-- Local System Info Card -->
+        <div class="card">
+          <div class="card-header">
+            <h3>Local Environment Status</h3>
+            <p class="text-muted">Hardware & directory path details for your local setup.</p>
+          </div>
+
+          <div class="system-info-list">
+            <div class="info-row">
+              <span class="info-label">Gemini AI Model:</span>
+              <span class="info-value font-mono text-emerald">gemini-3.6-flash (Active)</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Local Database:</span>
+              <span class="info-value font-mono" id="sys-db-path">Sysmentix/job-referral-agent/data/db.json</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Uploads Directory:</span>
+              <span class="info-value font-mono" id="sys-uploads-path">Sysmentix/job-referral-agent/data/uploads/</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Local Server Port:</span>
+              <span class="info-value font-mono" id="sys-port">5050</span>
+            </div>
+          </div>
+
+          <div class="mt-4 p-3 rounded bg-surface-dark">
+            <h4 class="text-sm font-semibold mb-2">🎁 Included Chrome Extension Helper:</h4>
+            <p class="text-xs text-muted">A companion Chrome Extension is ready in <code>job-referral-agent/extension/</code>. Go to <code>chrome://extensions</code>, enable Developer Mode, and click <strong>Load unpacked</strong> to send jobs from LinkedIn with 1 click!</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- MODAL: ADD NEW JOB -->
+  <div class="modal-backdrop hidden" id="modal-add-job">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3>Add Target Job</h3>
+        <button class="modal-close" onclick="closeAddJobModal()">&times;</button>
+      </div>
+      <form id="add-job-form">
+        <div class="modal-body">
+          <div class="form-grid">
+            <div class="form-group">
+              <label>Job Title</label>
+              <input type="text" id="job-title-input" placeholder="e.g. Senior Backend Engineer" />
+            </div>
+            <div class="form-group">
+              <label>Company Name</label>
+              <input type="text" id="job-company-input" placeholder="e.g. Razorpay, Stripe, Swiggy" />
+            </div>
+            <div class="form-group">
+              <label>Location / Work Type</label>
+              <input type="text" id="job-location-input" placeholder="e.g. Remote / Bengaluru" />
+            </div>
+            <div class="form-group">
+              <label>Job Posting URL (Optional)</label>
+              <input type="url" id="job-url-input" placeholder="https://..." />
+            </div>
+            <div class="form-group full-width">
+              <label>Job Description (Paste Full Text) <span class="required">*</span></label>
+              <textarea id="job-desc-input" rows="8" placeholder="Paste the complete job description, responsibilities, and requirements here..." required></textarea>
+            </div>
+            <div class="form-group full-width">
+              <label class="checkbox-label">
+                <input type="checkbox" id="job-auto-analyze" checked />
+                <span>Auto-calculate Match Score & Gap Analysis with Gemini AI immediately</span>
+              </label>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline" onclick="closeAddJobModal()">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="btn-submit-job">Save & Analyze Job</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL: JOB DETAILS & REFERRAL STUDIO -->
+  <div class="modal-backdrop hidden" id="modal-job-details">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-header">
+        <div>
+          <h3 id="modal-job-title">Job Title</h3>
+          <span class="text-muted text-sm" id="modal-job-company">Company Name</span>
+        </div>
+        <button class="modal-close" onclick="closeJobDetailsModal()">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <!-- Direct Google Form Banner if attached -->
+        <div id="modal-form-banner" class="hidden mb-3" style="border-radius: 8px; padding: 12px 16px; display: none; justify-content: space-between; align-items: center; gap: 12px;">
+          <div style="flex: 1;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <strong id="modal-form-title" style="font-size: 0.9rem;">📝 Recruiter Application Form</strong>
+              <span id="modal-form-status-pill" style="font-size: 0.72rem; font-weight: 600; padding: 2px 8px; border-radius: 9999px;"></span>
+            </div>
+            <p id="modal-form-desc" style="margin: 3px 0 0 0; font-size: 0.8rem; color: #cbd5e1;">The recruiter shared a direct Google Form for candidate referral / application.</p>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <button id="modal-form-recheck-btn" type="button" class="btn btn-sm btn-outline" style="font-size: 0.75rem; padding: 5px 9px; cursor: pointer;" onclick="recheckModalFormStatus()">
+              🔄 Re-verify
+            </button>
+            <a id="modal-form-link" href="#" target="_blank" rel="noopener" class="btn btn-sm btn-success" style="color: white; text-decoration: none; font-weight: 600; white-space: nowrap;">
+              📝 Open Google Form &rarr;
+            </a>
+          </div>
+        </div>
+
+        <!-- AI Match Analysis Card -->
+        <div class="match-score-banner mb-4" id="modal-match-banner">
+          <div class="score-circle" id="modal-score-circle">
+            <span class="score-num" id="modal-score-val">--</span>
+            <span class="score-pct">%</span>
+          </div>
+          <div class="score-summary">
+            <h4 id="modal-score-title">Fit Score Analysis</h4>
+            <p id="modal-score-desc" class="text-muted text-sm">Click "Analyze Fit" to compute match score using Gemini.</p>
+            <div class="strengths-gaps-row mt-2" id="modal-strengths-gaps"></div>
+          </div>
+        </div>
+
+        <!-- Job Referral Contacts Section & 5-6 Decision Makers -->
+        <div class="contacts-section mb-4">
+          <div class="flex-between mb-2">
+            <div>
+              <h4>👥 5-6 Company Decision Makers (Managers, Leads & HR)</h4>
+              <span class="text-xs text-muted">Discovers official corporate work emails (Priority 1) with DNS MX check and LinkedIn profiles.</span>
+            </div>
+            <div class="btn-group">
+              <button class="btn btn-sm btn-accent" id="btn-discover-decision-makers">
+                <span>🔍 Auto-Discover Decision Makers</span>
+              </button>
+              <button class="btn btn-sm btn-success" id="btn-batch-send-job-contacts" title="Automatically craft customized referral pitches with Job ID & Post Link and send to all connections at once">
+                <span>🚀 Send to All Contacts (Batch)</span>
+              </button>
+              <button class="btn btn-sm btn-outline" onclick="openAddContactSubModal()">+ Manual Contact</button>
+            </div>
+          </div>
+
+          <!-- Free Public Search Dorking (Zero Accounts Needed) Hub -->
+          <div class="card mb-3 p-3" style="background: rgba(30, 41, 59, 0.7); border: 1px solid rgba(99, 102, 241, 0.35); border-radius: 8px;">
+            <div class="flex-between mb-2">
+              <div class="flex-align gap-2">
+                <span style="font-size: 16px;">🔎</span>
+                <strong style="color: #818cf8; font-size: 13px;">Free Public Search Dorking (Zero Accounts Needed)</strong>
+                <span class="badge" style="background: rgba(16, 185, 129, 0.15); color: #10b981; font-size: 10px; padding: 2px 6px;">0 API Quota Required</span>
+              </div>
+              <button type="button" class="btn btn-xs btn-outline" id="btn-copy-dork-query" onclick="copyDorkQuery()" title="Copy target query to clipboard">
+                📋 Copy Dork Query
+              </button>
+            </div>
+            
+            <p class="text-xs text-muted mb-2">
+              Public search engines index current employees and their roles directly from LinkedIn headlines. Click below to inspect or extract current managers, tech leads, and recruiters:
+            </p>
+
+            <div class="dork-query-code p-2 mb-2 font-mono text-xs" style="background: rgba(15, 23, 42, 0.85); border: 1px solid rgba(255,255,255,0.08); border-radius: 4px; color: #a5b4fc; word-break: break-all;" id="dork-query-display">
+              site:linkedin.com/in "<span id="dork-company-name">Company</span>" ("Engineering Manager" OR "Tech Lead" OR "HR" OR "Recruiter")
+            </div>
+
+            <div class="flex-between flex-wrap gap-2">
+              <div class="btn-group flex-wrap">
+                <a id="btn-dork-google" href="#" target="_blank" rel="noopener" class="btn btn-xs btn-outline" style="border-color: rgba(66, 133, 244, 0.4); color: #93c5fd;">
+                  🌐 Google Dork
+                </a>
+                <a id="btn-dork-bing" href="#" target="_blank" rel="noopener" class="btn btn-xs btn-outline" style="border-color: rgba(0, 120, 215, 0.4); color: #67e8f9;">
+                  🔍 Bing Dork
+                </a>
+                <a id="btn-dork-duckduckgo" href="#" target="_blank" rel="noopener" class="btn btn-xs btn-outline" style="border-color: rgba(222, 88, 51, 0.4); color: #fca5a5;">
+                  🦆 DuckDuckGo
+                </a>
+                <a id="btn-dork-brave" href="#" target="_blank" rel="noopener" class="btn btn-xs btn-outline" style="border-color: rgba(251, 84, 43, 0.4); color: #fdba74;">
+                  🦁 Brave Dork
+                </a>
+                <a id="btn-dork-apollo" href="#" target="_blank" rel="noopener" class="btn btn-xs btn-outline" style="border-color: rgba(251, 191, 36, 0.4); color: #fde047;">
+                  ⚡ Apollo Free Filter
+                </a>
+              </div>
+              <button type="button" class="btn btn-xs btn-secondary" onclick="toggleQuickAddDorkForm()">
+                ➕ Quick-Add Found Employee
+              </button>
+            </div>
+
+            <!-- Collapsible Quick Add Form -->
+            <div id="quick-add-dork-form" class="hidden mt-3 pt-2" style="border-top: 1px solid rgba(255,255,255,0.08);">
+              <span class="text-xs text-muted mb-1 block">Paste an employee headline found via public search to auto-derive work email and add to roster:</span>
+              <div class="flex-align gap-2">
+                <input type="text" id="quick-dork-name" placeholder="Full Name (e.g. Badri Vasudevan)" class="form-control" style="font-size: 12px; height: 30px; flex: 2;" />
+                <input type="text" id="quick-dork-role" placeholder="Role (e.g. Engineering Lead)" class="form-control" style="font-size: 12px; height: 30px; flex: 2;" />
+                <input type="url" id="quick-dork-linkedin" placeholder="LinkedIn Profile URL (optional)" class="form-control" style="font-size: 12px; height: 30px; flex: 3;" />
+                <button type="button" class="btn btn-xs btn-primary" onclick="handleQuickAddDorkContact()" style="white-space: nowrap; height: 30px;">
+                  Add Contact
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Live Discovered Decision Makers Preview Box -->
+          <div id="decision-makers-box" class="decision-makers-box hidden mb-3">
+            <div class="flex-between mb-2">
+              <span class="text-xs font-semibold text-emerald">✨ Discovered 5-6 Key Insiders (Official Corporate & Apollo Channels):</span>
+              <div class="btn-group">
+                <a id="btn-apollo-company-link" href="#" target="_blank" rel="noopener" class="btn btn-xs btn-outline" style="border-color: #fbbf24; color: #fbbf24;" title="Open Apollo.io people search directly filtered for this company">
+                  ⚡ Open Apollo.io Company Filter
+                </a>
+                <button class="btn btn-xs btn-primary" id="btn-batch-save-contacts">
+                  ➕ Batch Add All to Roster
+                </button>
+              </div>
+            </div>
+            <div class="decision-makers-grid" id="decision-makers-grid"></div>
+          </div>
+
+          <div class="contacts-list" id="modal-contacts-list">
+            <div class="text-muted text-sm py-2">No referral contacts added for this company yet. Click "Auto-Discover 5-6 Decision Makers" to find team leads, engineering managers, and HR!</div>
+          </div>
+        </div>
+
+        <!-- Job Description Preview -->
+        <details class="job-desc-details">
+          <summary>View Full Job Description</summary>
+          <div class="job-desc-body mt-2" id="modal-job-desc"></div>
+        </details>
+      </div>
+
+      <div class="modal-footer flex-between">
+        <button class="btn btn-danger btn-sm" id="btn-delete-job">Delete Job</button>
+        <div class="btn-group">
+          <button class="btn btn-secondary" id="btn-reanalyze-job">🔄 Re-Analyze with AI</button>
+          <button class="btn btn-success" id="btn-footer-batch-send">🚀 Send to All Contacts (Batch)</button>
+          <button class="btn btn-primary" id="btn-open-pitch-studio">✉️ Open AI Outreach Studio</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: ADD CONTACT -->
+  <div class="modal-backdrop hidden" id="modal-add-contact">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3>Add Referral Target / Recruiter</h3>
+        <button class="modal-close" onclick="closeAddContactSubModal()">&times;</button>
+      </div>
+      <form id="add-contact-form">
+        <div class="modal-body">
+          <div class="form-grid">
+            <div class="form-group">
+              <label>Contact Full Name <span class="required">*</span></label>
+              <input type="text" id="contact-name" placeholder="e.g. Rahul Sharma" required />
+            </div>
+            <div class="form-group">
+              <label>Role at Company <span class="required">*</span></label>
+              <input type="text" id="contact-role" placeholder="e.g. Engineering Manager, Senior SDE" required />
+            </div>
+            <div class="form-group">
+              <label>Contact Type</label>
+              <select id="contact-type" class="custom-select">
+                <option value="peer">Peer / Team Engineer (Best for referrals)</option>
+                <option value="manager">Hiring Manager / Team Lead</option>
+                <option value="recruiter">Recruiter / Talent Acquisition</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Email Address</label>
+              <input type="email" id="contact-email" placeholder="name@company.com" />
+            </div>
+            <div class="form-group full-width">
+              <label>LinkedIn Profile URL</label>
+              <input type="url" id="contact-linkedin" placeholder="https://linkedin.com/in/..." />
+            </div>
+            <!-- Email pattern generator helper -->
+            <div class="form-group full-width">
+              <button type="button" class="btn btn-xs btn-outline" id="btn-suggest-email-patterns">
+                🔮 Suggest Probable Corporate Emails
+              </button>
+              <div id="email-suggestions-box" class="suggestions-box hidden mt-2"></div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline" onclick="closeAddContactSubModal()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save Contact</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL: AI OUTREACH & EMAIL SENDER STUDIO -->
+  <div class="modal-backdrop hidden" id="modal-outreach-studio">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-header">
+        <div>
+          <h3>AI Outreach Studio</h3>
+          <span class="text-muted text-sm" id="studio-subtitle">Draft and send tailored cold email or LinkedIn note</span>
+        </div>
+        <button class="modal-close" onclick="closeOutreachStudioModal()">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <div class="studio-top-bar">
+          <div class="form-group">
+            <label>Recipient Contact</label>
+            <select id="studio-contact-select" class="custom-select"></select>
+          </div>
+          <div class="form-group">
+            <label>Outreach Strategy</label>
+            <select id="studio-pitch-type" class="custom-select">
+              <option value="peer_referral">👥 Peer Referral Request (Colleague-to-Colleague)</option>
+              <option value="hiring_manager">👔 Hiring Manager Pitch (Value & Impact)</option>
+              <option value="linkedin_note">💼 LinkedIn Note (&lt;300 Characters)</option>
+            </select>
+          </div>
+          <div class="form-group flex-end">
+            <button type="button" class="btn btn-secondary" id="btn-generate-ai-pitch">
+              <span>✨ Generate Pitch with Gemini</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Safe Delivery Warning Banner -->
+        <div id="studio-delivery-warning" class="alert alert-warning hidden mt-2">
+          <strong>⚠️ Inferred Mailbox Warning:</strong> The selected contact email (<span id="studio-warning-email" class="font-mono"></span>) is an unverified pattern. If the recipient does not have this specific mailbox, Gmail will return <em>"Address not found (550)"</em>.
+          <div class="mt-1 text-xs">
+            💡 <strong>Safe Alternative:</strong> Switch to the verified corporate inbox (<strong>careers@<span id="studio-warning-domain"></span></strong>) or connect with current employees on LinkedIn to guarantee 100% deliverability.
+          </div>
+        </div>
+
+        <!-- Quick AI Tone Refinement Buttons -->
+        <div class="ai-refine-pills mt-2">
+          <span class="text-xs text-muted mr-2">Refine Tone:</span>
+          <button type="button" class="pill-btn" onclick="refinePitch('Make it shorter and more punchy')">⚡ Shorter</button>
+          <button type="button" class="pill-btn" onclick="refinePitch('Make it highlight technical depth and system architecture')">💻 More Technical</button>
+          <button type="button" class="pill-btn" onclick="refinePitch('Make it warmer and more conversational')">🤝 Warmer</button>
+        </div>
+
+        <div class="editor-area mt-3">
+          <div class="form-group" id="studio-subject-group">
+            <label>Email Subject Line</label>
+            <input type="text" id="studio-subject-input" placeholder="Compelling subject line..." />
+          </div>
+          <div class="form-group">
+            <label>Message Body</label>
+            <textarea id="studio-body-input" rows="9" placeholder="AI tailored message will appear here... You can edit freely."></textarea>
+          </div>
+          <div class="form-group" id="studio-followup-group">
+            <label class="text-xs text-muted">Suggested Follow-Up Nudge (if no reply in 3 days):</label>
+            <textarea id="studio-followup-input" rows="2" class="text-sm bg-surface-dark"></textarea>
+          </div>
+
+          <div class="options-row flex-between mt-3">
+            <label class="checkbox-label" id="studio-attachment-checkbox">
+              <input type="checkbox" id="studio-attach-resume" checked />
+              <span>Attach my Resume PDF (<span id="studio-resume-name">Resume</span>)</span>
+            </label>
+            <button type="button" class="btn btn-sm btn-outline" id="btn-copy-clipboard">
+              📋 Copy to Clipboard
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-footer flex-between">
+        <button type="button" class="btn btn-outline" onclick="closeOutreachStudioModal()">Cancel</button>
+        <button type="button" class="btn btn-primary" id="btn-send-email">
+          <span>🚀 Send Email from My Gmail</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: AI REVERT & REPLY STUDIO -->
+  <div class="modal-backdrop hidden" id="modal-revert-studio">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <div>
+          <h3>Revert Back with AI</h3>
+          <span class="text-muted text-sm" id="revert-modal-subtitle">Respond directly to recruiter/manager's reply</span>
+        </div>
+        <button class="modal-close" onclick="closeRevertStudioModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="incoming-preview-card p-3 rounded bg-surface-dark mb-3">
+          <span class="text-xs text-emerald font-semibold">Incoming Reply Received:</span>
+          <p class="text-sm mt-1 text-primary" id="revert-incoming-text">"..."</p>
+          <span class="text-xs text-muted" id="revert-incoming-meta">From: recruiter@company.com</span>
+        </div>
+
+        <div class="form-group mb-3">
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-generate-ai-revert">
+            <span>✨ Regenerate AI Revert Response</span>
+          </button>
+        </div>
+
+        <div class="form-group mb-3">
+          <label>Reply Subject</label>
+          <input type="text" id="revert-subject-input" />
+        </div>
+
+        <div class="form-group mb-3">
+          <label>Message Body</label>
+          <textarea id="revert-body-input" rows="8" placeholder="AI drafted revert message..."></textarea>
+        </div>
+      </div>
+      <div class="modal-footer flex-between">
+        <button class="btn btn-outline" onclick="closeRevertStudioModal()">Cancel</button>
+        <button class="btn btn-primary" id="btn-send-revert-email">
+          <span>🚀 Send Revert from My Gmail</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: BATCH OUTREACH PROGRESS -->
+  <div class="modal-backdrop hidden" id="modal-batch-progress">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <div>
+          <h3>🚀 Batch Referral Outreach Dispatch</h3>
+          <span class="text-muted text-xs" id="batch-progress-subtitle">Sending tailored emails to all discovered contacts...</span>
+        </div>
+        <button class="modal-close" onclick="closeBatchProgressModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="text-sm text-muted mb-3">
+          Auto-generating customized referral messages with <strong>Job ID & Post Link</strong> attached, then dispatching via your personal Gmail with resume attached.
+        </p>
+        <div class="progress-bar-wrap mb-3">
+          <div class="progress-bar-fill" id="batch-progress-bar" style="width: 15%"></div>
+        </div>
+        <div class="batch-status-text font-mono text-sm mb-3" id="batch-status-text">
+          Dispatching batch emails...
+        </div>
+        <div class="batch-results-list" id="batch-results-list" style="max-height: 220px; overflow-y: auto;">
+        </div>
+      </div>
+      <div class="modal-footer flex-end">
+        <button type="button" class="btn btn-primary" id="btn-close-batch-modal" onclick="closeBatchProgressModal()">
+          Close
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

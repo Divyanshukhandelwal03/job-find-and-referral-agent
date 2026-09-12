@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Happpy Referral Agent Helper (Local)",
+  "version": "1.0.0",
+  "description": "One-click capture jobs and LinkedIn profiles directly to your local Referral Agent",
+  "permissions": ["activeTab", "scripting"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Happpy Local Agent"
+  }
+}
