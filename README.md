@@ -95,6 +95,37 @@ Open your browser and navigate to:
 
 ---
 
+## ✉️ How to Setup Automatic Gmail Sending (Google App Password)
+
+To send referral outreach emails and follow-ups directly from your personal Gmail address, Google requires an **App Password** (a 16-character secure code that allows automated SMTP sending without sharing your main Google account password).
+
+### Step-by-Step Instructions:
+
+1. **Enable 2-Step Verification**:
+   - Go to your [Google Account Security Settings](https://myaccount.google.com/security).
+   - Under *"How you sign in to Google"*, ensure that **2-Step Verification** is turned **ON**. (Google requires 2-Step Verification to create App Passwords).
+
+2. **Generate your 16-Letter App Password**:
+   - Directly visit the App Passwords page: 👉 **[myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords)**
+     *(Alternatively, search for "App Passwords" in the search bar at the top of your Google Account page).*
+   - In the **App name** field, enter: `Job Referral Agent` (or any custom name).
+   - Click **Create**.
+   - A modal will appear displaying your **16-character App Password** (e.g. `abcd efgh ijkl mnop`).
+   - Copy this 16-character code.
+
+3. **Connect in the Application**:
+   - Open the web dashboard at `http://localhost:5050`.
+   - Navigate to the **⚙️ Settings & Gmail** tab.
+   - Enter your full Gmail address (e.g. `youremail@gmail.com`).
+   - Paste the 16-character code into the **Google App Password** field *(spaces are automatically cleaned up)*.
+   - Click **Save & Test Gmail Connection**.
+   - Once verified, you can send personalized referral requests and follow-ups with your resume attached in 1 click!
+
+> [!TIP]
+> Your App Password is stored strictly on your local machine in `./data/db.json` and is never transmitted to any third-party servers.
+
+---
+
 ## 🔒 Security & Privacy Notice
 - All resumes, contacts, candidate profiles, and outreach logs are stored strictly on your local machine in `./data/`.
 - Never commit your `.env` file or `./data/` folder. Both are excluded by default in `.gitignore`.
