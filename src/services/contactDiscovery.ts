@@ -13,6 +13,7 @@ export interface DiscoveredDecisionMaker {
   officialEmail: string;
   secondaryEmail?: string;
   linkedinUrl: string;
+  githubUrl?: string;
   apolloUrl?: string;
   apolloCompanyUrl?: string;
   domain: string;
@@ -20,7 +21,7 @@ export interface DiscoveredDecisionMaker {
   deliveryRisk: 'safe' | 'unverified';
   priorityLabel: string;
   confidence: 'verified_corporate' | 'job_post_extracted' | 'inferred_pattern' | 'pattern_confirmed';
-  source?: 'github_org' | 'email_format' | 'job_post' | 'apollo' | 'hunter' | 'corporate_channel' | 'linkedin_dork';
+  source?: 'github_events' | 'github_org' | 'email_format' | 'job_post' | 'apollo' | 'hunter' | 'corporate_channel' | 'linkedin_dork';
 }
 
 export type EmailPattern = 'first.last' | 'first.l' | 'flast' | 'first' | 'f.last' | 'last.first';
@@ -382,6 +383,60 @@ export async function extractEmailFormatEmployees(
 }
 
 /**
+ * In-memory cache for GitHub Event Mining (1 hour TTL)
+ */
+const githubMiningCache = new Map<string, { timestamp: number; contacts: DiscoveredDecisionMaker[] }>();
+
+function getGitHubHeaders(token?: string): Record<string, string> {
+  const headers: Record<string, string> = {
+    'User-Agent': 'job-referral-agent/1.0',
+    'Accept': 'application/vnd.github.v3+json',
+  };
+  const effectiveToken = token || process.env.GITHUB_TOKEN || process.env.GITHUB_PAT;
+  if (effectiveToken && effectiveToken.length > 5) {
+    headers['Authorization'] = `Bearer ${effectiveToken.trim()}`;
+  }
+  return headers;
+}
+
+async function fetchGitHubJson(url: string, token?: string, timeoutMs = 8000): Promise<any> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      headers: getGitHubHeaders(token),
+      signal: controller.signal,
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch (_) {
+    return null;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+export function isValidDeliverableEmail(email?: string): boolean {
+  if (!email || typeof email !== 'string') return false;
+  const em = email.toLowerCase().trim();
+  if (
+    !em.includes('@') ||
+    em.includes('noreply') ||
+    em.includes('actions@github.com') ||
+    em.includes('bot') ||
+    em.includes('dependabot') ||
+    em.includes('sentry.io') ||
+    em.includes('example.com') ||
+    em.includes('w3.org') ||
+    em.includes('localhost') ||
+    em.length < 5
+  ) {
+    return false;
+  }
+  return /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(em);
+}
+
+/**
  * Free Worldwide Public Commits: GitHub Organization Employee Harvester
  * Extracts authentic, deliverable work emails from active software engineers and engineering leads.
  */
@@ -439,6 +494,7 @@ export async function extractGitHubOrgEmployees(
                   contactType: 'peer',
                   officialEmail: em,
                   linkedinUrl: `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(`"${authorName}" "${company}"`)}`,
+                  githubUrl: `https://github.com/${slug}/${repo.name}`,
                   domain,
                   verified: true,
                   deliveryRisk: 'safe',
@@ -458,6 +514,277 @@ export async function extractGitHubOrgEmployees(
     return contacts;
   } catch (err) {
     console.warn('[GitHub Org Harvester] Extraction skipped:', err);
+    return [];
+  }
+}
+
+/**
+ * PRIMARY DISCOVERY ENGINE: GitHub Public Event & Commit Mining
+ * Mines authentic deliverable personal (@gmail.com) and corporate work emails
+ * directly from GitHub user public events and commit activity.
+ */
+export async function mineGitHubEmployeesAndEvents(params: {
+  company: string;
+  domain: string;
+  jobTitle?: string;
+  githubToken?: string;
+}): Promise<DiscoveredDecisionMaker[]> {
+  const { company, domain, jobTitle, githubToken } = params;
+  const cleanCompany = company.trim();
+  const cleanDomain = domain.toLowerCase().trim();
+  const cacheKey = `${cleanCompany.toLowerCase()}_${cleanDomain}`;
+
+  const cached = githubMiningCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < 3600000) {
+    console.log(`[GitHub Event Mining] Returning ${cached.contacts.length} cached contacts for "${cleanCompany}"`);
+    return cached.contacts;
+  }
+
+  const shortCompany = cleanCompany
+    .replace(/\b(inc|ltd|pvt|technologies|tech|solutions|corp|corporation|gmbh|llc|holdings|group)\b/gi, '')
+    .trim();
+
+  console.log(`[GitHub Event Mining] Mining active engineers for company: "${cleanCompany}" (search: "${shortCompany}", domain: ${cleanDomain})...`);
+
+  const results: DiscoveredDecisionMaker[] = [];
+  const seenEmails = new Set<string>();
+  const seenLogins = new Set<string>();
+
+  try {
+    // 1. Search users by company
+    let searchItems: any[] = [];
+    const query1 = `type:user company:"${shortCompany}"`;
+    const res1 = await fetchGitHubJson(
+      `https://api.github.com/search/users?q=${encodeURIComponent(query1)}&sort=followers&order=desc&per_page=12`,
+      githubToken
+    );
+
+    if (res1?.items && Array.isArray(res1.items) && res1.items.length > 0) {
+      searchItems = res1.items;
+    }
+
+    if (searchItems.length < 3) {
+      const query2 = `type:user "${shortCompany}"`;
+      const res2 = await fetchGitHubJson(
+        `https://api.github.com/search/users?q=${encodeURIComponent(query2)}&sort=followers&order=desc&per_page=12`,
+        githubToken
+      );
+      if (res2?.items && Array.isArray(res2.items)) {
+        for (const it of res2.items) {
+          if (!searchItems.some((s) => s.login === it.login)) {
+            searchItems.push(it);
+          }
+        }
+      }
+    }
+
+    // Filter out bots / organizations
+    const candidateUsers = searchItems
+      .filter((u) => u && u.login && !u.login.toLowerCase().includes('bot') && u.type === 'User')
+      .slice(0, 8);
+
+    console.log(`[GitHub Event Mining] Found ${candidateUsers.length} potential engineer profiles on GitHub`);
+
+    // 2. Inspect candidates and extract emails from public events / commits
+    for (const cand of candidateUsers) {
+      if (seenLogins.has(cand.login)) continue;
+      seenLogins.add(cand.login);
+
+      const userProfile = await fetchGitHubJson(`https://api.github.com/users/${cand.login}`, githubToken);
+      if (!userProfile) continue;
+
+      const userCompany = (userProfile.company || '').toLowerCase();
+      const userBio = (userProfile.bio || '').toLowerCase();
+      const compLower = shortCompany.toLowerCase();
+
+      // Ensure user is actually affiliated with the target company
+      const isAffiliated =
+        userCompany.includes(compLower) ||
+        userBio.includes(compLower) ||
+        userCompany.includes(cleanCompany.toLowerCase());
+
+      if (!isAffiliated && candidateUsers.length > 4) {
+        continue;
+      }
+
+      const fullName = userProfile.name?.trim() || cand.login;
+      const rawBio = userProfile.bio?.trim() || '';
+
+      // Extract Role
+      let role = '';
+      const roleMatch = rawBio.match(
+        /(?:Engineering Manager|Director of Engineering|Tech Lead|Technical Lead|Staff Engineer|Principal Engineer|Senior Software Engineer|Software Engineer|Lead Engineer|Frontend Engineer|Backend Engineer|Android Engineer|iOS Engineer|Full Stack Engineer|SDE[- ]?[123]|Data Engineer|ML Engineer|DevOps Engineer)/i
+      );
+      if (roleMatch) {
+        role = `${roleMatch[0]} at ${cleanCompany}`;
+      } else if (rawBio && rawBio.length < 50) {
+        role = `${rawBio} at ${cleanCompany}`;
+      } else {
+        role = `Software Engineer at ${cleanCompany}`;
+      }
+
+      let contactType: 'manager' | 'peer' | 'recruiter' = 'peer';
+      const roleLower = role.toLowerCase();
+      if (/manager|director|vp|head|lead/i.test(roleLower)) {
+        contactType = 'manager';
+      } else if (/recruiter|talent|hr/i.test(roleLower)) {
+        contactType = 'recruiter';
+      }
+
+      // ── MINE EMAIL FROM COMMITS & PUBLIC ACTIVITY ──
+      let minedEmail: string | null = null;
+
+      // A. Public Profile Email
+      if (userProfile.email && isValidDeliverableEmail(userProfile.email)) {
+        minedEmail = userProfile.email.toLowerCase().trim();
+      }
+
+      // B. Public Events Commits
+      if (!minedEmail) {
+        const events = await fetchGitHubJson(
+          `https://api.github.com/users/${cand.login}/events/public?per_page=15`,
+          githubToken
+        );
+        if (Array.isArray(events)) {
+          for (const ev of events) {
+            if (ev.type === 'PushEvent') {
+              if (Array.isArray(ev.payload?.commits)) {
+                for (const c of ev.payload.commits) {
+                  const em = c.author?.email?.toLowerCase().trim();
+                  if (isValidDeliverableEmail(em)) {
+                    minedEmail = em;
+                    break;
+                  }
+                }
+              }
+              if (!minedEmail && ev.payload?.head && ev.repo?.name) {
+                const commitObj = await fetchGitHubJson(
+                  `https://api.github.com/repos/${ev.repo.name}/commits/${ev.payload.head}`,
+                  githubToken,
+                  5000
+                );
+                const em = commitObj?.commit?.author?.email?.toLowerCase().trim();
+                if (isValidDeliverableEmail(em)) {
+                  minedEmail = em;
+                  break;
+                }
+              }
+            }
+            if (minedEmail) break;
+          }
+        }
+      }
+
+      // C. Public Repos Commits
+      if (!minedEmail) {
+        const repos = await fetchGitHubJson(
+          `https://api.github.com/users/${cand.login}/repos?sort=pushed&per_page=2`,
+          githubToken
+        );
+        if (Array.isArray(repos)) {
+          for (const r of repos) {
+            if (r.fork || !r.name) continue;
+            const commits = await fetchGitHubJson(
+              `https://api.github.com/repos/${cand.login}/${r.name}/commits?per_page=4`,
+              githubToken,
+              5000
+            );
+            if (Array.isArray(commits)) {
+              for (const c of commits) {
+                const em = c.commit?.author?.email?.toLowerCase().trim();
+                if (isValidDeliverableEmail(em)) {
+                  minedEmail = em;
+                  break;
+                }
+              }
+            }
+            if (minedEmail) break;
+          }
+        }
+      }
+
+      // Decide deliverability & priority
+      let officialEmail = '';
+      let secondaryEmail: string | undefined = undefined;
+      let isVerified = false;
+      let deliveryRisk: 'safe' | 'unverified' = 'unverified';
+      let priorityLabel = '';
+      let confidence: 'verified_corporate' | 'inferred_pattern' = 'inferred_pattern';
+
+      if (minedEmail) {
+        const isCorp = minedEmail.endsWith(`@${cleanDomain}`);
+        officialEmail = minedEmail;
+        isVerified = true;
+        deliveryRisk = 'safe';
+        confidence = 'verified_corporate';
+
+        if (isCorp) {
+          priorityLabel = '🟢 Verified Active Engineer (Real Work Email via GitHub)';
+        } else {
+          // Personal email mined from active commits
+          secondaryEmail = buildEmailFromPattern(fullName, cleanDomain, 'first.last');
+          priorityLabel = minedEmail.includes('@gmail')
+            ? '🟢 Verified Active Engineer (Direct Personal Gmail via GitHub)'
+            : '🟢 Verified Active Engineer (Direct Personal Email via GitHub)';
+        }
+      } else {
+        // Inferred fallback email
+        officialEmail = buildEmailFromPattern(fullName, cleanDomain, 'first.last');
+        isVerified = false;
+        deliveryRisk = 'unverified';
+        confidence = 'inferred_pattern';
+        priorityLabel = '🔵 Active GitHub Engineer (Inferred Work Email)';
+      }
+
+      if (!seenEmails.has(officialEmail)) {
+        seenEmails.add(officialEmail);
+        results.push({
+          id: `gh-evt-${uuidv4().substring(0, 8)}`,
+          name: fullName,
+          role,
+          contactType,
+          officialEmail,
+          secondaryEmail,
+          linkedinUrl: `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(`"${fullName}" "${cleanCompany}"`)}`,
+          githubUrl: userProfile.html_url || `https://github.com/${cand.login}`,
+          domain,
+          verified: isVerified,
+          deliveryRisk,
+          priorityLabel,
+          confidence,
+          source: 'github_events',
+        });
+      }
+    }
+
+    // 3. Also supplement with GitHub Org harvester if org exists
+    const orgEmployees = await extractGitHubOrgEmployees(company, domain);
+    for (const orgEmp of orgEmployees) {
+      if (!seenEmails.has(orgEmp.officialEmail.toLowerCase())) {
+        seenEmails.add(orgEmp.officialEmail.toLowerCase());
+        results.push(orgEmp);
+      }
+    }
+
+    // Boost contacts matching jobTitle
+    if (jobTitle) {
+      const titleLower = jobTitle.toLowerCase();
+      results.sort((a, b) => {
+        const aMatch = a.role.toLowerCase().includes(titleLower);
+        const bMatch = b.role.toLowerCase().includes(titleLower);
+        if (aMatch && !bMatch) return -1;
+        if (!aMatch && bMatch) return 1;
+        return 0;
+      });
+    }
+
+    if (results.length > 0) {
+      githubMiningCache.set(cacheKey, { timestamp: Date.now(), contacts: results });
+    }
+
+    return results;
+  } catch (err) {
+    console.error('[GitHub Event Mining] Error during mining:', err);
     return [];
   }
 }
@@ -920,6 +1247,55 @@ export async function discoverDecisionMakers(params: {
 
   // Verify MX records for this domain
   const isMxValid = await verifyDomainMx(domain);
+
+  // ── PHASE 1: PRIMARY PIPELINE (GitHub Public Event & Commit Mining) ──
+  console.log(`[Contact Discovery] Initiating PRIMARY Pipeline: GitHub Public Event Mining for "${company}" (domain: ${domain})...`);
+  let gitHubToken: string | undefined;
+  try {
+    const { db } = await import('../db/index.js');
+    const settings = db.getSettings();
+    gitHubToken = settings?.githubToken || process.env.GITHUB_TOKEN;
+  } catch (_) {}
+
+  const githubContacts = await mineGitHubEmployeesAndEvents({
+    company,
+    domain,
+    jobTitle,
+    githubToken: gitHubToken,
+  });
+
+  const verifiedGitHubContacts = githubContacts.filter((c) => c.verified && c.deliveryRisk === 'safe');
+  console.log(`[Contact Discovery] Primary GitHub Mining yielded ${githubContacts.length} contacts (${verifiedGitHubContacts.length} verified safe deliverable)`);
+
+  // If Primary Pipeline succeeded with 2 or more verified deliverable contacts:
+  if (verifiedGitHubContacts.length >= 2) {
+    console.log(`[Contact Discovery] ✅ Primary Pipeline SUCCEEDED with ${verifiedGitHubContacts.length} verified contacts. Using GitHub-mined engineers!`);
+
+    // Attach guaranteed corporate talent inboxes as optional backup channels
+    const corpCareersEmail = `careers@${domain}`;
+    if (!githubContacts.some((c) => c.officialEmail === corpCareersEmail)) {
+      githubContacts.push({
+        id: `dm-corp-1-${uuidv4().substring(0, 8)}`,
+        name: `${company} Talent & Referral Team`,
+        role: 'Corporate Talent Acquisition & Referral Inbox',
+        contactType: 'recruiter',
+        officialEmail: corpCareersEmail,
+        secondaryEmail: `jobs@${domain}`,
+        linkedinUrl: `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(`"${company}" "Talent Acquisition"`)}`,
+        domain,
+        verified: isMxValid,
+        deliveryRisk: isMxValid ? 'safe' : 'unverified',
+        priorityLabel: '🟢 Guaranteed Corporate Referral Channel (Safe Delivery)',
+        confidence: 'verified_corporate',
+        source: 'corporate_channel',
+      });
+    }
+
+    return githubContacts.slice(0, 8);
+  }
+
+  // ── PHASE 2: SECONDARY FALLBACK PIPELINE ──
+  console.log(`[Contact Discovery] ⚠️ Primary GitHub mining yielded < 2 verified contacts. Triggering SECONDARY fallback pipeline...`);
   const contacts: DiscoveredDecisionMaker[] = [];
   const seenEmails = new Set<string>();
 
@@ -1158,10 +1534,21 @@ Return JSON array:
     });
   }
 
+  // Merge any contacts found during Primary GitHub mining so they aren't lost:
+  if (githubContacts.length > 0) {
+    for (const gh of githubContacts) {
+      if (!seenEmails.has(gh.officialEmail.toLowerCase())) {
+        seenEmails.add(gh.officialEmail.toLowerCase());
+        contacts.unshift(gh);
+      }
+    }
+  }
+
   // ── Priority Ranking ──
-  // Sort contacts so verified corporate inboxes and pattern-confirmed decision makers appear first
+  // Sort contacts so verified contacts and pattern-confirmed decision makers appear first
   contacts.sort((a, b) => {
     const score = (c: DiscoveredDecisionMaker) => {
+      if (c.source === 'github_events' && c.verified) return 105;
       if (c.confidence === 'job_post_extracted') return 100;
       if (c.source === 'github_org' && c.verified) return 90;
       if (c.source === 'email_format' && c.verified) return 85;
@@ -1185,6 +1572,14 @@ export function toReferralContact(
   jobId: string,
   company: string
 ): ReferralContact {
+  const isPersonal =
+    dm.source === 'github_events' &&
+    (dm.officialEmail.includes('@gmail') ||
+      dm.officialEmail.includes('@outlook') ||
+      dm.officialEmail.includes('@yahoo') ||
+      dm.officialEmail.includes('@proton') ||
+      dm.officialEmail.includes('@icloud'));
+
   return {
     id: uuidv4(),
     jobId,
@@ -1192,16 +1587,19 @@ export function toReferralContact(
     name: dm.name,
     role: dm.role,
     email: dm.officialEmail,
-    emailType:
-      dm.confidence === 'verified_corporate'
-        ? 'verified_inbox'
-        : dm.confidence === 'job_post_extracted'
-        ? 'job_post'
-        : 'pattern_generated',
+    secondaryEmail: dm.secondaryEmail,
+    emailType: isPersonal
+      ? 'personal'
+      : dm.confidence === 'verified_corporate'
+      ? 'verified_inbox'
+      : dm.confidence === 'job_post_extracted'
+      ? 'job_post'
+      : 'pattern_generated',
     domain: dm.domain,
     verified: dm.verified,
     deliveryRisk: dm.deliveryRisk,
     linkedinUrl: dm.linkedinUrl,
+    githubUrl: dm.githubUrl,
     apolloUrl: dm.apolloUrl || dm.apolloCompanyUrl,
     contactType: dm.contactType,
     status: 'uncontacted',

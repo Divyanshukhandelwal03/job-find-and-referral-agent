@@ -67,11 +67,13 @@ export interface ReferralContact {
   name: string;
   role: string;
   email?: string;
+  secondaryEmail?: string;
   emailType?: 'official' | 'personal' | 'pattern_generated' | 'verified_inbox' | 'job_post';
   domain?: string;
   verified?: boolean;
   deliveryRisk?: 'safe' | 'unverified';
   linkedinUrl?: string;
+  githubUrl?: string;
   apolloUrl?: string;
   contactType: 'peer' | 'manager' | 'recruiter';
   status: 'uncontacted' | 'emailed' | 'linkedin_connected' | 'replied';
@@ -115,6 +117,7 @@ export interface AppSettings {
   defaultFollowUpDays: number;
   apolloApiKey?: string;
   hunterApiKey?: string;
+  githubToken?: string;
 }
 
 export interface DatabaseSchema {

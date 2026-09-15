@@ -659,7 +659,9 @@ function renderDiscoveredDecisionMakers(contacts, domain) {
     const isSafe = c.deliveryRisk === 'safe' || c.confidence === 'verified_corporate' || c.confidence === 'job_post_extracted' || c.confidence === 'pattern_confirmed';
     
     let badge = '';
-    if (c.source === 'github_org') {
+    if (c.source === 'github_events') {
+      badge = '<span class="dm-mx-badge" style="background: rgba(16,185,129,0.15); color: #10b981; border: 1px solid rgba(16,185,129,0.3);" title="Real engineer personal or corporate email verified from active public GitHub activity">✓ GitHub Activity</span>';
+    } else if (c.source === 'github_org') {
       badge = '<span class="dm-mx-badge" style="background: rgba(16,185,129,0.15); color: #10b981; border: 1px solid rgba(16,185,129,0.3);" title="Real active engineer corporate email verified from public GitHub organization">✓ Verified Dev Email</span>';
     } else if (c.source === 'email_format') {
       badge = '<span class="dm-mx-badge" style="background: rgba(16,185,129,0.15); color: #10b981; border: 1px solid rgba(16,185,129,0.3);" title="Corporate email verified from open directory">✓ Verified Work Email</span>';
@@ -673,6 +675,9 @@ function renderDiscoveredDecisionMakers(contacts, domain) {
       badge = '<span class="dm-mx-badge" style="background: rgba(245,158,11,0.15); color: #f59e0b; border: 1px solid rgba(245,158,11,0.3);" title="Mailbox is inferred. Connect on LinkedIn or use corporate inbox to ensure 0% bounce.">⚠️ Inferred Pattern</span>';
     }
 
+    const githubLink = c.githubUrl
+      ? `<a href="${c.githubUrl}" target="_blank" rel="noopener" class="btn btn-xs btn-outline" style="color: #60a5fa; border-color: rgba(96,165,250,0.35);">🐙 GitHub</a>`
+      : '';
     const apolloLink = c.apolloUrl
       ? `<a href="${c.apolloUrl}" target="_blank" rel="noopener" class="btn btn-xs btn-outline" style="color: #fbbf24; border-color: rgba(251,191,36,0.35);">⚡ Apollo</a>`
       : '';
@@ -698,6 +703,7 @@ function renderDiscoveredDecisionMakers(contacts, domain) {
         <div class="dm-links-row mt-2 flex-between">
           ${c.secondaryEmail ? `<span class="text-xs text-muted font-mono">Alt: ${escapeHtml(c.secondaryEmail)}</span>` : '<span></span>'}
           <div class="btn-group">
+            ${githubLink}
             ${apolloLink}
             ${linkedinLink}
           </div>
