@@ -63,7 +63,150 @@ export interface JobSearchFilters {
 }
 
 /**
- * Searches live LinkedIn jobs using public guest search endpoint with multi-page pagination
+ * Safe fetch with configurable timeout using AbortController
+ */
+async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = 6000): Promise<Response> {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { ...options, signal: controller.signal });
+    return res;
+  } finally {
+    clearTimeout(id);
+  }
+}
+
+/**
+ * Smart regional & remote location eligibility checker.
+ * Ensures candidates searching for specific cities/countries (e.g. "India", "Berlin", "London")
+ * receive both direct local jobs AND eligible remote worldwide/regional opportunities,
+ * while respecting negative restrictions (e.g. "US Only").
+ */
+export function isLocationEligible(
+  jobLocation: string = '',
+  targetLocation: string = '',
+  isRemote: boolean = false
+): boolean {
+  const cleanTarget = (targetLocation || '').toLowerCase().trim();
+  if (!cleanTarget || cleanTarget === 'worldwide' || cleanTarget === 'remote' || cleanTarget === 'any' || cleanTarget === 'all') {
+    return true; // Candidate is open to anywhere
+  }
+
+  const cleanJobLoc = (jobLocation || '').toLowerCase().trim();
+
+  // 1. Direct match
+  if (cleanJobLoc.includes(cleanTarget)) {
+    return true;
+  }
+
+  // 2. City / Country synonyms
+  const locationAliases: Record<string, string[]> = {
+    india: ['bengaluru', 'bangalore', 'hyderabad', 'pune', 'mumbai', 'delhi', 'noida', 'gurugram', 'gurgaon', 'chennai', 'kolkata', 'ahmedabad'],
+    us: ['united states', 'usa', 'san francisco', 'new york', 'seattle', 'austin', 'california', 'texas', 'chicago', 'boston'],
+    usa: ['united states', 'us', 'san francisco', 'new york', 'seattle', 'austin', 'california', 'texas', 'chicago', 'boston'],
+    uk: ['united kingdom', 'london', 'manchester', 'birmingham', 'edinburgh', 'england'],
+    germany: ['berlin', 'munich', 'hamburg', 'frankfurt', 'cologne'],
+    canada: ['toronto', 'vancouver', 'montreal', 'ottawa'],
+  };
+
+  for (const [key, aliases] of Object.entries(locationAliases)) {
+    if (cleanTarget === key || aliases.includes(cleanTarget)) {
+      if (cleanJobLoc.includes(key) || aliases.some((a) => cleanJobLoc.includes(a))) {
+        return true;
+      }
+    }
+  }
+
+  // Non-remote job without location match is not eligible
+  if (!isRemote && !cleanJobLoc.includes('remote')) {
+    return false;
+  }
+
+  // 3. Remote Regional Boundaries
+  const isIndiaTarget = cleanTarget === 'india' || (locationAliases.india && locationAliases.india.includes(cleanTarget));
+  const isUsTarget = cleanTarget === 'us' || cleanTarget === 'usa' || (locationAliases.us && locationAliases.us.includes(cleanTarget));
+  const isEuropeTarget = cleanTarget === 'uk' || cleanTarget === 'germany' || ['france', 'spain', 'netherlands', 'poland', 'europe'].includes(cleanTarget);
+
+  if (isIndiaTarget) {
+    if (
+      cleanJobLoc.includes('us only') ||
+      cleanJobLoc.includes('usa only') ||
+      cleanJobLoc.includes('united states only') ||
+      cleanJobLoc.includes('north america only') ||
+      cleanJobLoc.includes('europe only') ||
+      cleanJobLoc.includes('uk only') ||
+      cleanJobLoc.includes('latam only')
+    ) {
+      return false;
+    }
+    if (
+      cleanJobLoc.includes('apac') ||
+      cleanJobLoc.includes('asia') ||
+      cleanJobLoc.includes('worldwide') ||
+      cleanJobLoc.includes('global') ||
+      cleanJobLoc.includes('anywhere') ||
+      cleanJobLoc.includes('everywhere') ||
+      cleanJobLoc === '' ||
+      cleanJobLoc === 'remote' ||
+      cleanJobLoc === 'remote worldwide'
+    ) {
+      return true;
+    }
+  }
+
+  if (isUsTarget) {
+    if (cleanJobLoc.includes('europe only') || cleanJobLoc.includes('apac only') || cleanJobLoc.includes('asia only')) {
+      return false;
+    }
+    if (
+      cleanJobLoc.includes('americas') ||
+      cleanJobLoc.includes('worldwide') ||
+      cleanJobLoc.includes('global') ||
+      cleanJobLoc.includes('anywhere') ||
+      cleanJobLoc === '' ||
+      cleanJobLoc === 'remote' ||
+      cleanJobLoc === 'remote worldwide'
+    ) {
+      return true;
+    }
+  }
+
+  if (isEuropeTarget) {
+    if (cleanJobLoc.includes('us only') || cleanJobLoc.includes('apac only')) {
+      return false;
+    }
+    if (
+      cleanJobLoc.includes('emea') ||
+      cleanJobLoc.includes('europe') ||
+      cleanJobLoc.includes('worldwide') ||
+      cleanJobLoc.includes('global') ||
+      cleanJobLoc.includes('anywhere') ||
+      cleanJobLoc === '' ||
+      cleanJobLoc === 'remote'
+    ) {
+      return true;
+    }
+  }
+
+  // 4. Default global remote match
+  if (
+    cleanJobLoc.includes('worldwide') ||
+    cleanJobLoc.includes('anywhere') ||
+    cleanJobLoc.includes('everywhere') ||
+    cleanJobLoc.includes('global') ||
+    cleanJobLoc.includes('work from anywhere') ||
+    cleanJobLoc === '' ||
+    cleanJobLoc === 'remote' ||
+    cleanJobLoc === 'remote worldwide'
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Searches live LinkedIn jobs using public guest search endpoint with parallel multi-page pagination
  */
 export async function searchLinkedInJobs(
   keywords = 'Software Engineer',
@@ -71,9 +214,9 @@ export async function searchLinkedInJobs(
   remoteOnly = false
 ): Promise<DiscoveredJob[]> {
   const jobs: DiscoveredJob[] = [];
-  const pages = [0, 25, 50]; // 3 pages = 75 candidate jobs
+  const pages = [0, 25, 50, 75]; // 4 pages = 100 candidate jobs
 
-  for (const start of pages) {
+  const pagePromises = pages.map(async (start) => {
     try {
       const params = new URLSearchParams({
         keywords: keywords.trim(),
@@ -88,18 +231,19 @@ export async function searchLinkedInJobs(
       params.append('f_TPR', 'r2592000'); // past month
 
       const searchUrl = `https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?${params.toString()}`;
-      const res = await fetch(searchUrl, {
+      const res = await fetchWithTimeout(searchUrl, {
         headers: {
           'User-Agent':
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
           Accept: 'text/html,application/xhtml+xml',
         },
-      });
+      }, 7000);
 
-      if (!res.ok) continue;
+      if (!res.ok) return [];
 
       const html = await res.text();
       const cards = html.split('<div class="base-card');
+      const pageJobs: DiscoveredJob[] = [];
 
       for (let i = 1; i < cards.length; i++) {
         const card = cards[i];
@@ -139,7 +283,7 @@ export async function searchLinkedInJobs(
           expRange = '0-2 years';
         }
 
-        jobs.push({
+        pageJobs.push({
           id: `li-${uuidv4().substring(0, 8)}`,
           title,
           company,
@@ -155,8 +299,17 @@ export async function searchLinkedInJobs(
           matchingSkills: [],
         });
       }
+      return pageJobs;
     } catch (err: any) {
       console.warn(`[LinkedIn Scraper] Page ${start} error:`, err?.message || err);
+      return [];
+    }
+  });
+
+  const pageResults = await Promise.allSettled(pagePromises);
+  for (const r of pageResults) {
+    if (r.status === 'fulfilled' && Array.isArray(r.value)) {
+      jobs.push(...r.value);
     }
   }
 
@@ -292,7 +445,7 @@ export async function searchLinkedInCompanyJobs(params: {
  */
 async function resolveGoogleFormFromLnkd(lnkdUrl: string): Promise<string | undefined> {
   try {
-    const html = await fetchWithCurl(lnkdUrl, 5000);
+    const html = await fetchWithCurl(lnkdUrl, 3000);
     const m = html.match(/href="(https:\/\/(?:forms\.gle\/[a-zA-Z0-9_\-]+|docs\.google\.com\/forms\/[^\s"'<>]+))"/i);
     if (m) return m[1].split('?')[0];
   } catch (_) {}
@@ -329,7 +482,7 @@ export async function validateGoogleFormStatus(rawUrl: string): Promise<GoogleFo
   }
 
   try {
-    const html = await fetchWithCurl(cleanUrl, 8000);
+    const html = await fetchWithCurl(cleanUrl, 3000);
     if (!html || html.length < 100) {
       const res: GoogleFormValidationResult = {
         url: cleanUrl,
@@ -537,12 +690,30 @@ export async function searchLinkedInRecruiterFormPosts(
     `site:linkedin.com/posts ("forms.gle" OR "docs.google.com/forms") ("we are hiring" OR "job opening" OR "apply here")`,
   ];
 
-  for (const q of queries) {
-    try {
-      const searchUrl = `https://search.brave.com/search?q=${encodeURIComponent(q).replace(/%20/g, '+')}`;
-      const html = await fetchWithCurl(searchUrl, 12000);
-      if (!html || html.length < 500) continue;
+  interface CandidatePost {
+    postUrl: string;
+    recruiterName: string;
+    rawDesc: string;
+    googleFormUrl?: string;
+    companyName: string;
+    jobTitle: string;
+    expRange: string;
+  }
 
+  const candidatePosts: CandidatePost[] = [];
+
+  try {
+    // Run search queries concurrently with a 5-second timeout
+    const searchResponses = await Promise.allSettled(
+      queries.map((q) => {
+        const searchUrl = `https://search.brave.com/search?q=${encodeURIComponent(q).replace(/%20/g, '+')}`;
+        return fetchWithCurl(searchUrl, 5000);
+      })
+    );
+
+    for (const r of searchResponses) {
+      if (r.status !== 'fulfilled' || !r.value || r.value.length < 500) continue;
+      const html = r.value;
       const regex = /title:"([^"]+?)",url:"(https:\/\/(?:www\.|[a-z]{2,3}\.)?linkedin\.com\/(?:posts|pulse|feed\/update)\/[^"]+)"(?:,full_title:[^,]+)?,description:"([^"]*)"/gi;
       let m: RegExpExecArray | null;
 
@@ -577,28 +748,8 @@ export async function searchLinkedInRecruiterFormPosts(
             rawDesc.match(/(https?:\/\/lnkd\.in\/[a-zA-Z0-9_\-]+)/i) ||
             rawTitle.match(/(https?:\/\/lnkd\.in\/[a-zA-Z0-9_\-]+)/i);
           if (lnkdMatch) {
-            const resolved = await resolveGoogleFormFromLnkd(lnkdMatch[1]);
-            googleFormUrl = resolved || lnkdMatch[1];
+            googleFormUrl = lnkdMatch[1];
           }
-        }
-
-        // If not found in snippet, fetch post body if fewer than 15 jobs found so far
-        if (!googleFormUrl && jobs.length < 15) {
-          try {
-            const postHtml = await fetchWithCurl(postUrl, 4000);
-            const formInPost = postHtml.match(
-              /(https?:\/\/(?:forms\.gle\/[a-zA-Z0-9_\-]+|docs\.google\.com\/forms\/[^\s"'<>]+))/i
-            );
-            if (formInPost) {
-              googleFormUrl = formInPost[1].split('?')[0];
-            } else {
-              const postLnkd = postHtml.match(/https?:\/\/lnkd\.in\/[a-zA-Z0-9_\-]+/i);
-              if (postLnkd) {
-                const resolved = await resolveGoogleFormFromLnkd(postLnkd[0]);
-                if (resolved) googleFormUrl = resolved;
-              }
-            }
-          } catch (_) {}
         }
 
         // Determine company name from snippet
@@ -624,51 +775,104 @@ export async function searchLinkedInRecruiterFormPosts(
         if (lowerDesc.includes('fresh') || lowerDesc.includes('0-1') || lowerDesc.includes('entry')) expRange = '0-2 years';
         else if (lowerDesc.includes('senior') || lowerDesc.includes('5+') || lowerDesc.includes('5-7')) expRange = '4-8+ years';
 
-        let formStatus: 'active' | 'closed' | 'broken' | 'restricted' = 'active';
-        let formStatusReason: string = 'Form is open and accepting responses';
-        if (googleFormUrl) {
-          const check = await validateGoogleFormStatus(googleFormUrl);
-          formStatus = check.status;
-          formStatusReason = check.reason;
-          if (check.formTitle && jobTitle === cleanKeywords) {
-            jobTitle = check.formTitle;
-          }
-        }
-
-        // If the form is closed, broken, or restricted, skip it so candidates never see dead forms
-        if (googleFormUrl && (formStatus === 'closed' || formStatus === 'broken' || formStatus === 'restricted')) {
-          console.log(`[Recruiter Post Extractor] Filtered out ${formStatus} form: ${googleFormUrl} (${formStatusReason})`);
-          continue;
-        }
-
-        jobs.push({
-          id: `rec-form-${uuidv4().substring(0, 8)}`,
-          title: jobTitle,
-          company: companyName,
-          location: 'Remote / Direct Recruiter',
-          url: postUrl,
-          googleFormUrl,
-          googleFormStatus: formStatus,
-          googleFormStatusReason: formStatusReason,
+        candidatePosts.push({
+          postUrl,
           recruiterName,
-          description: `📝 Recruiter Post by ${recruiterName}: ${rawDesc}`,
-          source: 'google_form',
-          visaSponsorship: false,
-          remote: true,
-          postedTime: 'Active Recruiter Post',
-          experienceRange: expRange,
-          matchScore: 88,
-          matchingSkills: [],
+          rawDesc,
+          googleFormUrl,
+          companyName,
+          jobTitle,
+          expRange,
         });
+
+        if (candidatePosts.length >= 30) break;
+      }
+    }
+
+    // Resolve lnkd shortlinks in parallel if present
+    const lnkdCandidates = candidatePosts.filter((c) => c.googleFormUrl && c.googleFormUrl.includes('lnkd.in'));
+    if (lnkdCandidates.length > 0) {
+      await Promise.allSettled(
+        lnkdCandidates.map(async (c) => {
+          if (c.googleFormUrl) {
+            const resolved = await resolveGoogleFormFromLnkd(c.googleFormUrl);
+            if (resolved) c.googleFormUrl = resolved;
+          }
+        })
+      );
+    }
+
+    // Validate unique Google Forms in parallel
+    const formUrlsToValidate = Array.from(
+      new Set(
+        candidatePosts
+          .map((c) => c.googleFormUrl)
+          .filter(
+            (url): url is string =>
+              typeof url === 'string' && (url.includes('forms.gle') || url.includes('docs.google.com/forms'))
+          )
+      )
+    );
+
+    const validationMap = new Map<string, GoogleFormValidationResult>();
+    if (formUrlsToValidate.length > 0) {
+      const valResults = await Promise.allSettled(
+        formUrlsToValidate.map((url) => validateGoogleFormStatus(url))
+      );
+      valResults.forEach((res, idx) => {
+        if (res.status === 'fulfilled') {
+          validationMap.set(formUrlsToValidate[idx], res.value);
+        }
+      });
+    }
+
+    // Assemble validated jobs
+    for (const c of candidatePosts) {
+      let formStatus: 'active' | 'closed' | 'broken' | 'restricted' = 'active';
+      let formStatusReason = 'Form is open and accepting responses';
+      let jobTitle = c.jobTitle;
+
+      if (c.googleFormUrl && validationMap.has(c.googleFormUrl)) {
+        const val = validationMap.get(c.googleFormUrl)!;
+        formStatus = val.status;
+        formStatusReason = val.reason;
+        if (val.formTitle && jobTitle === cleanKeywords) {
+          jobTitle = val.formTitle;
+        }
       }
 
-      if (jobs.length >= 20) break;
-    } catch (err: any) {
-      console.warn('[Recruiter Post Extractor] Error querying posts:', err?.message || err);
+      // Filter out invalid/closed/restricted/broken forms
+      if (c.googleFormUrl && (formStatus === 'closed' || formStatus === 'broken' || formStatus === 'restricted')) {
+        continue;
+      }
+
+      jobs.push({
+        id: `rec-form-${uuidv4().substring(0, 8)}`,
+        title: jobTitle,
+        company: c.companyName,
+        location: 'Remote / Direct Recruiter',
+        url: c.postUrl,
+        googleFormUrl: c.googleFormUrl,
+        googleFormStatus: formStatus,
+        googleFormStatusReason: formStatusReason,
+        recruiterName: c.recruiterName,
+        description: `📝 Recruiter Post by ${c.recruiterName}: ${c.rawDesc}`,
+        source: 'google_form',
+        visaSponsorship: false,
+        remote: true,
+        postedTime: 'Active Recruiter Post',
+        experienceRange: c.expRange,
+        matchScore: 88,
+        matchingSkills: [],
+      });
+
+      if (jobs.length >= 25) break;
     }
+  } catch (err: any) {
+    console.warn('[Recruiter Post Extractor] Error querying posts:', err?.message || err);
   }
 
-  // If fewer than 5 jobs found via live search (e.g. search engine rate-limiting), supplement with verified active recruiter posts
+  // Supplement with verified active recruiter posts if fewer than 5 found
   if (jobs.length < 5) {
     for (const item of VERIFIED_RECRUITER_FORM_POSTS) {
       if (!seenPosts.has(item.postUrl)) {
@@ -711,46 +915,29 @@ export async function searchArbeitnowJobs(
   remoteOnly = false
 ): Promise<DiscoveredJob[]> {
   try {
-    // Fetch pages 1, 2, and 3 in parallel (750 total candidate jobs)
-    const [res1, res2, res3] = await Promise.all([
-      fetch('https://www.arbeitnow.com/api/job-board-api?page=1', { headers: { Accept: 'application/json' } }),
-      fetch('https://www.arbeitnow.com/api/job-board-api?page=2', { headers: { Accept: 'application/json' } }),
-      fetch('https://www.arbeitnow.com/api/job-board-api?page=3', { headers: { Accept: 'application/json' } }),
-    ]);
+    const cleanKw = (keywords || '').trim();
+    const searchUrl = cleanKw
+      ? `https://www.arbeitnow.com/api/job-board-api?search=${encodeURIComponent(cleanKw)}`
+      : 'https://www.arbeitnow.com/api/job-board-api?page=1';
 
-    const json1 = (res1.ok ? await res1.json() : {}) as any;
-    const json2 = (res2.ok ? await res2.json() : {}) as any;
-    const json3 = (res3.ok ? await res3.json() : {}) as any;
+    const res = await fetchWithTimeout(searchUrl, { headers: { Accept: 'application/json' } }, 6000);
+    if (!res.ok) return [];
 
-    const rawJobs: any[] = [...(json1?.data || []), ...(json2?.data || []), ...(json3?.data || [])];
-
-    const cleanKeywords = keywords.toLowerCase().split(/\s+/).filter(Boolean);
-    const cleanLocation = location.toLowerCase();
+    const json = (await res.json()) as any;
+    const rawJobs: any[] = json?.data || [];
 
     const filtered = rawJobs.filter((job) => {
-      if (visaSponsorshipOnly && !job.visa_sponsorship) {
+      if (visaSponsorshipOnly && !job.visa_sponsorship) return false;
+      if (remoteOnly && !job.remote) return false;
+      if (!isLocationEligible(job.location || (job.remote ? 'Remote Worldwide' : ''), location, Boolean(job.remote))) {
         return false;
-      }
-      if (remoteOnly && !job.remote) {
-        return false;
-      }
-      if (cleanLocation && cleanLocation !== 'worldwide') {
-        const jobLoc = (job.location || '').toLowerCase();
-        if (!jobLoc.includes(cleanLocation) && !jobLoc.includes('remote') && !job.remote) {
-          return false;
-        }
-      }
-      if (cleanKeywords.length > 0) {
-        const textContent = `${job.title} ${job.company_name} ${(job.tags || []).join(' ')}`.toLowerCase();
-        const matchesAny = cleanKeywords.some((k) => textContent.includes(k));
-        if (!matchesAny) return false;
       }
       return true;
     });
 
-    return filtered.slice(0, 50).map((j) => {
+    return filtered.slice(0, 60).map((j) => {
       let expRange = '2-5 years';
-      const lower = j.title.toLowerCase();
+      const lower = (j.title || '').toLowerCase();
       if (lower.includes('senior') || lower.includes('lead') || lower.includes('staff')) expRange = '4-8+ years';
       if (lower.includes('junior') || lower.includes('entry') || lower.includes('intern')) expRange = '0-2 years';
 
@@ -787,41 +974,35 @@ export async function searchRemoteOKJobs(
   location = ''
 ): Promise<DiscoveredJob[]> {
   try {
-    const res = await fetch('https://remoteok.com/api', {
+    const cleanKw = (keywords || '').toLowerCase().trim();
+    // Extract first clean tech keyword as tag (e.g. react, python, node, devops)
+    const tagMatch = cleanKw.split(/\s+/).find((w) => w.length >= 3 && !['engineer', 'developer', 'lead', 'senior', 'junior'].includes(w));
+    const tag = tagMatch || 'dev';
+
+    const url = `https://remoteok.com/api?tag=${encodeURIComponent(tag)}`;
+    const res = await fetchWithTimeout(url, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
         Accept: 'application/json',
       },
-    });
+    }, 6000);
 
     if (!res.ok) return [];
 
     const raw = ((await res.json()) as any[]) || [];
     const validJobs = raw.filter((d) => d && d.position && d.company);
 
-    const cleanKeywords = keywords.toLowerCase().split(/\s+/).filter(Boolean);
-    const cleanLocation = location.toLowerCase();
-
     const filtered = validJobs.filter((job) => {
-      if (cleanLocation && cleanLocation !== 'worldwide' && cleanLocation !== 'remote') {
-        const jobLoc = (job.location || '').toLowerCase();
-        if (!jobLoc.includes(cleanLocation) && !jobLoc.includes('remote') && !jobLoc.includes('anywhere')) {
-          return false;
-        }
+      const loc = job.location || 'Remote Worldwide';
+      if (!isLocationEligible(loc, location, true)) {
+        return false;
       }
-
-      if (cleanKeywords.length > 0) {
-        const fullText = `${job.position} ${job.company} ${(job.tags || []).join(' ')}`.toLowerCase();
-        const matchesAny = cleanKeywords.some((k) => fullText.includes(k));
-        if (!matchesAny) return false;
-      }
-
       return true;
     });
 
-    return filtered.slice(0, 40).map((j) => {
+    return filtered.slice(0, 50).map((j) => {
       let expRange = '2-5 years';
-      const lower = j.position.toLowerCase();
+      const lower = (j.position || '').toLowerCase();
       if (lower.includes('senior') || lower.includes('lead') || lower.includes('staff')) expRange = '4-8+ years';
       if (lower.includes('junior') || lower.includes('entry') || lower.includes('intern')) expRange = '0-2 years';
 
@@ -858,37 +1039,33 @@ export async function searchJobicyJobs(
   location = ''
 ): Promise<DiscoveredJob[]> {
   try {
-    const res = await fetch('https://jobicy.com/api/v2/remote-jobs?count=50', {
+    const cleanKw = (keywords || '').toLowerCase().trim();
+    const tagMatch = cleanKw.split(/\s+/).find((w) => w.length >= 3 && !['engineer', 'developer', 'lead', 'senior', 'junior'].includes(w));
+    const url = tagMatch
+      ? `https://jobicy.com/api/v2/remote-jobs?tag=${encodeURIComponent(tagMatch)}&count=50`
+      : 'https://jobicy.com/api/v2/remote-jobs?count=50';
+
+    const res = await fetchWithTimeout(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         Accept: 'application/json',
       },
-    });
+    }, 6000);
 
     if (!res.ok) return [];
 
     const json = ((await res.json()) as any) || {};
     const rawJobs: any[] = json.jobs || [];
 
-    const cleanKeywords = keywords.toLowerCase().split(/\s+/).filter(Boolean);
-    const cleanLocation = location.toLowerCase();
-
     const filtered = rawJobs.filter((job) => {
-      if (cleanLocation && cleanLocation !== 'worldwide' && cleanLocation !== 'remote') {
-        const geo = (job.jobGeo || '').toLowerCase();
-        if (!geo.includes(cleanLocation) && !geo.includes('anywhere')) return false;
+      const geo = job.jobGeo || 'Remote Worldwide';
+      if (!isLocationEligible(geo, location, true)) {
+        return false;
       }
-
-      if (cleanKeywords.length > 0) {
-        const fullText = `${job.jobTitle} ${job.companyName} ${(job.jobIndustry || []).join(' ')}`.toLowerCase();
-        const matchesAny = cleanKeywords.some((k) => fullText.includes(k));
-        if (!matchesAny) return false;
-      }
-
       return true;
     });
 
-    return filtered.slice(0, 30).map((j) => {
+    return filtered.slice(0, 40).map((j) => {
       let expRange = '2-5 years';
       const lower = (j.jobTitle || '').toLowerCase();
       if (lower.includes('senior') || lower.includes('lead') || lower.includes('staff')) expRange = '4-8+ years';
@@ -937,16 +1114,15 @@ export async function searchWeWorkRemotelyJobs(
 
     const responses = await Promise.allSettled(
       categories.map((cat) =>
-        fetch(`https://weworkremotely.com/categories/${cat}.rss`, {
+        fetchWithTimeout(`https://weworkremotely.com/categories/${cat}.rss`, {
           headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-        }).then((r) => (r.ok ? r.text() : ''))
+        }, 5000).then((r) => (r.ok ? r.text() : ''))
       )
     );
 
     const jobs: DiscoveredJob[] = [];
     const seenLinks = new Set<string>();
-    const cleanKeywords = keywords.toLowerCase().split(/\s+/).filter(Boolean);
-    const cleanLocation = location.toLowerCase();
+    const cleanKeywords = keywords.toLowerCase().split(/\s+/).filter((k) => k.length > 2);
 
     for (const r of responses) {
       if (r.status !== 'fulfilled' || !r.value) continue;
@@ -966,10 +1142,8 @@ export async function searchWeWorkRemotelyJobs(
         const company = parts.length > 1 ? parts[0].trim() : 'Tech Company';
         const title = parts.length > 1 ? parts.slice(1).join(':').trim() : rawTitle;
 
-        if (cleanLocation && cleanLocation !== 'worldwide' && cleanLocation !== 'remote') {
-          if (!region.toLowerCase().includes(cleanLocation) && !region.toLowerCase().includes('anywhere')) {
-            continue;
-          }
+        if (!isLocationEligible(region, location, true)) {
+          continue;
         }
 
         if (cleanKeywords.length > 0) {
@@ -1017,27 +1191,19 @@ export async function searchHimalayasJobs(
   location = ''
 ): Promise<DiscoveredJob[]> {
   try {
-    const [res1, res2] = await Promise.all([
-      fetch('https://himalayas.app/jobs/api?offset=0', { headers: { 'User-Agent': 'Mozilla/5.0' } }),
-      fetch('https://himalayas.app/jobs/api?offset=20', { headers: { 'User-Agent': 'Mozilla/5.0' } }),
-    ]);
+    const cleanKw = (keywords || 'developer').trim();
+    const url = `https://himalayas.app/jobs/api?q=${encodeURIComponent(cleanKw)}&limit=50`;
+    const res = await fetchWithTimeout(url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, 6000);
+    if (!res.ok) return [];
 
-    const json1 = (res1.ok ? await res1.json() : {}) as any;
-    const json2 = (res2.ok ? await res2.json() : {}) as any;
-    const rawJobs: any[] = [...(json1?.jobs || []), ...(json2?.jobs || [])];
-
-    const cleanKeywords = keywords.toLowerCase().split(/\s+/).filter(Boolean);
-    const cleanLocation = location.toLowerCase();
+    const json = ((await res.json()) as any) || {};
+    const rawJobs: any[] = json.jobs || [];
 
     const filtered = rawJobs.filter((job) => {
       if (!job || !job.title || !job.companyName) return false;
-      if (cleanLocation && cleanLocation !== 'worldwide' && cleanLocation !== 'remote') {
-        const restrictions = (job.locationRestrictions || []).join(' ').toLowerCase();
-        if (restrictions && !restrictions.includes(cleanLocation)) return false;
-      }
-      if (cleanKeywords.length > 0) {
-        const text = `${job.title} ${job.companyName} ${(job.categories || []).join(' ')} ${job.excerpt || ''}`.toLowerCase();
-        if (!cleanKeywords.some((k) => text.includes(k))) return false;
+      const restrictions = (job.locationRestrictions || []).join(' ');
+      if (!isLocationEligible(restrictions, location, true)) {
+        return false;
       }
       return true;
     });
@@ -1045,7 +1211,7 @@ export async function searchHimalayasJobs(
     return filtered.slice(0, 40).map((j) => {
       let expRange = '2-5 years';
       const seniority = (j.seniority || []).join(' ').toLowerCase();
-      const lower = j.title.toLowerCase();
+      const lower = (j.title || '').toLowerCase();
       if (lower.includes('senior') || lower.includes('lead') || lower.includes('staff') || seniority.includes('senior')) expRange = '4-8+ years';
       if (lower.includes('junior') || lower.includes('entry') || lower.includes('intern') || seniority.includes('entry')) expRange = '0-2 years';
 
@@ -1087,20 +1253,19 @@ export async function searchWorkingNomadsJobs(
   location = ''
 ): Promise<DiscoveredJob[]> {
   try {
-    const res = await fetch('https://www.workingnomads.com/api/exposed_jobs/', {
+    const res = await fetchWithTimeout('https://www.workingnomads.com/api/exposed_jobs/', {
       headers: { 'User-Agent': 'Mozilla/5.0' },
-    });
+    }, 6000);
     if (!res.ok) return [];
 
     const rawJobs = ((await res.json()) as any[]) || [];
-    const cleanKeywords = keywords.toLowerCase().split(/\s+/).filter(Boolean);
-    const cleanLocation = location.toLowerCase();
+    const cleanKeywords = keywords.toLowerCase().split(/\s+/).filter((k) => k.length > 2);
 
     const filtered = rawJobs.filter((job) => {
       if (!job || !job.title || !job.company_name) return false;
-      if (cleanLocation && cleanLocation !== 'worldwide' && cleanLocation !== 'remote') {
-        const loc = (job.location || '').toLowerCase();
-        if (loc && !loc.includes(cleanLocation) && !loc.includes('anywhere')) return false;
+      const loc = job.location || 'Remote Worldwide';
+      if (!isLocationEligible(loc, location, true)) {
+        return false;
       }
       if (cleanKeywords.length > 0) {
         const tagText = typeof job.tags === 'string' ? job.tags : (Array.isArray(job.tags) ? job.tags.join(' ') : '');
@@ -1112,7 +1277,7 @@ export async function searchWorkingNomadsJobs(
 
     return filtered.slice(0, 35).map((j) => {
       let expRange = '2-5 years';
-      const lower = j.title.toLowerCase();
+      const lower = (j.title || '').toLowerCase();
       if (lower.includes('senior') || lower.includes('lead') || lower.includes('staff')) expRange = '4-8+ years';
       if (lower.includes('junior') || lower.includes('entry') || lower.includes('intern')) expRange = '0-2 years';
 
@@ -1153,17 +1318,18 @@ export async function searchEuRemoteJobs(
   location = ''
 ): Promise<DiscoveredJob[]> {
   try {
-    const res = await fetch('https://euremotejobs.com/feed/', {
-      headers: { 'User-Agent': 'Mozilla/5.0' },
-    });
+    const res = await fetchWithTimeout('https://euremotejobs.com/feed/', {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        Accept: 'application/rss+xml, application/xml, text/xml',
+      },
+    }, 4000);
     if (!res.ok) return [];
 
     const xml = await res.text();
     const items = xml.split('<item>').slice(1);
     const jobs: DiscoveredJob[] = [];
-
-    const cleanKeywords = keywords.toLowerCase().split(/\s+/).filter(Boolean);
-    const cleanLocation = location.toLowerCase();
+    const cleanKeywords = keywords.toLowerCase().split(/\s+/).filter((k) => k.length > 2);
 
     for (const item of items) {
       const rawTitle = item.match(/<title>([\s\S]*?)<\/title>/)?.[1] || '';
@@ -1179,9 +1345,8 @@ export async function searchEuRemoteJobs(
       const title = parts[0]?.trim() || titleClean;
       const company = parts[1]?.trim() || 'European Tech Company';
 
-      if (cleanLocation && cleanLocation !== 'worldwide' && cleanLocation !== 'remote') {
-        const full = `${titleClean} ${descClean}`.toLowerCase();
-        if (!full.includes(cleanLocation) && !full.includes('europe') && !full.includes('anywhere')) continue;
+      if (!isLocationEligible('Remote (Europe / Worldwide)', location, true)) {
+        continue;
       }
 
       if (cleanKeywords.length > 0) {
@@ -1213,9 +1378,8 @@ export async function searchEuRemoteJobs(
       });
     }
 
-    return jobs.slice(0, 20);
-  } catch (err: any) {
-    console.error('[EuRemoteJobs RSS] Error searching jobs:', err?.message || err);
+    return jobs.slice(0, 25);
+  } catch (_) {
     return [];
   }
 }
@@ -1225,10 +1389,11 @@ export async function searchEuRemoteJobs(
  */
 export async function searchHNHiringJobs(keywords = ''): Promise<DiscoveredJob[]> {
   try {
-    const query = encodeURIComponent(`hiring ${keywords}`.trim());
-    const res = await fetch(`https://hn.algolia.com/api/v1/search_by_date?query=${query}&tags=comment&hitsPerPage=25`, {
+    const cleanKw = (keywords || 'developer').trim();
+    const query = encodeURIComponent(`${cleanKw} hiring`.trim());
+    const res = await fetchWithTimeout(`https://hn.algolia.com/api/v1/search_by_date?query=${query}&tags=comment&hitsPerPage=50`, {
       headers: { 'User-Agent': 'Mozilla/5.0' },
-    });
+    }, 5000);
 
     if (!res.ok) return [];
 
@@ -1265,7 +1430,7 @@ export async function searchHNHiringJobs(keywords = ''): Promise<DiscoveredJob[]
       });
     }
 
-    return jobs.slice(0, 20);
+    return jobs.slice(0, 40);
   } catch (err: any) {
     console.error('[HN Hiring API] Error searching jobs:', err?.message || err);
     return [];
@@ -1280,42 +1445,26 @@ export async function searchRemotiveJobs(
   location = ''
 ): Promise<DiscoveredJob[]> {
   try {
-    const res = await fetch('https://remotive.com/api/remote-jobs?category=software-dev&limit=60', {
-      headers: { Accept: 'application/json' },
-    });
+    const cleanKw = (keywords || 'software').trim();
+    const url = `https://remotive.com/api/remote-jobs?search=${encodeURIComponent(cleanKw)}&limit=100`;
+    const res = await fetchWithTimeout(url, { headers: { Accept: 'application/json' } }, 6000);
 
     if (!res.ok) return [];
 
     const json = (await res.json()) as any;
     const rawJobs: any[] = json?.jobs || [];
 
-    const cleanKeywords = keywords.toLowerCase().split(/\s+/).filter(Boolean);
-    const cleanLocation = location.toLowerCase();
-
     const filtered = rawJobs.filter((job) => {
-      if (cleanLocation && cleanLocation !== 'worldwide' && cleanLocation !== 'remote') {
-        const candLoc = (job.candidate_required_location || '').toLowerCase();
-        if (
-          !candLoc.includes(cleanLocation) &&
-          !candLoc.includes('worldwide') &&
-          !candLoc.includes('anywhere')
-        ) {
-          return false;
-        }
+      const candLoc = job.candidate_required_location || 'Remote Worldwide';
+      if (!isLocationEligible(candLoc, location, true)) {
+        return false;
       }
-
-      if (cleanKeywords.length > 0) {
-        const fullText = `${job.title} ${job.company_name} ${(job.tags || []).join(' ')}`.toLowerCase();
-        const matchesAny = cleanKeywords.some((k) => fullText.includes(k));
-        if (!matchesAny) return false;
-      }
-
       return true;
     });
 
-    return filtered.slice(0, 30).map((j) => {
+    return filtered.slice(0, 50).map((j) => {
       let expRange = '2-5 years';
-      const lower = j.title.toLowerCase();
+      const lower = (j.title || '').toLowerCase();
       if (lower.includes('senior') || lower.includes('lead') || lower.includes('staff')) expRange = '4-8+ years';
       if (lower.includes('junior') || lower.includes('entry') || lower.includes('intern')) expRange = '0-2 years';
 
@@ -1630,6 +1779,6 @@ export async function discoverWorldwideJobs(
   // Sort by matchScore descending
   deduplicated.sort((a, b) => b.matchScore - a.matchScore);
 
-  // Return up to 150 high-quality matching opportunities
-  return deduplicated.slice(0, filters.limit || 150);
+  // Return up to 250 high-quality matching opportunities
+  return deduplicated.slice(0, filters.limit || 250);
 }
