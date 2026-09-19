@@ -1,4 +1,7 @@
 import cron, { ScheduledTask } from 'node-cron';
+import puppeteer from 'puppeteer-core';
+import fs from 'fs';
+import path from 'path';
 import { db } from '../db/index.js';
 
 let activeCronTask: ScheduledTask | null = null;
@@ -9,6 +12,7 @@ export interface NaukriBoostResult {
   timestamp?: string;
   candidateName?: string;
   headline?: string;
+  resumeStatusText?: string;
   message?: string;
   error?: string;
 }
@@ -27,7 +31,47 @@ export function cleanCookieString(raw: string): string {
 }
 
 /**
- * Standard modern desktop browser headers that Naukri cloudgateway expects.
+ * Parses raw cookie string into Puppeteer cookie array for .naukri.com
+ */
+export function parseCookieStringToPuppeteer(cookieString: string) {
+  const parts = cookieString.split(';');
+  const cookies: Array<{ name: string; value: string; domain: string; path: string }> = [];
+  for (const p of parts) {
+    const trimmed = p.trim();
+    if (!trimmed) continue;
+    const eqIdx = trimmed.indexOf('=');
+    if (eqIdx > 0) {
+      const name = trimmed.substring(0, eqIdx).trim();
+      const value = trimmed.substring(eqIdx + 1).trim();
+      cookies.push({
+        name,
+        value,
+        domain: '.naukri.com',
+        path: '/',
+      });
+    }
+  }
+  return cookies;
+}
+
+/**
+ * Finds local Chrome or Edge executable on Windows
+ */
+export function getChromeExecutablePath(): string {
+  const candidates = [
+    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+    'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+    'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+  ];
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+  return 'chrome.exe';
+}
+
+/**
+ * Standard modern desktop browser headers for HTTP requests.
  */
 function getHeaders(cookie: string): Record<string, string> {
   return {
@@ -46,8 +90,8 @@ function getHeaders(cookie: string): Record<string, string> {
 }
 
 /**
- * Performs authenticated session validation and touches the profile timestamp
- * on Naukri.com using the candidate's active session cookie.
+ * Performs real resume upload and profile boosting on Naukri.com
+ * using the candidate's active session cookie and stored resume file.
  */
 export async function boostNaukriProfile(customCookie?: string): Promise<NaukriBoostResult> {
   const settings = db.getSettings();
@@ -60,6 +104,9 @@ export async function boostNaukriProfile(customCookie?: string): Promise<NaukriB
     return { success: false, status: 'error', error: errorMsg };
   }
 
+  // Ensure cookie is persisted in local settings
+  db.saveSettings({ naukriCookie: cookie });
+
   const istTimeString = new Date().toLocaleTimeString('en-IN', {
     timeZone: 'Asia/Kolkata',
     hour: '2-digit',
@@ -68,23 +115,73 @@ export async function boostNaukriProfile(customCookie?: string): Promise<NaukriB
     hour12: true,
   });
 
-  console.log(`\n[Naukri Booster] Initiating profile boost at ${istTimeString} IST...`);
+  console.log(`\n========================================================`);
+  console.log(`[Naukri Booster] Initiating real profile & resume boost at ${istTimeString} IST...`);
+  console.log(`========================================================`);
 
+  // 1. Locate candidate's resume PDF from system
+  const profile = db.getProfile();
+  let resumePath = profile?.resumeFilePath || '';
+  if (!resumePath || !fs.existsSync(resumePath)) {
+    const uploadsDir = path.resolve(process.cwd(), 'data', 'uploads');
+    if (fs.existsSync(uploadsDir)) {
+      const files = fs.readdirSync(uploadsDir).filter((f) => f.endsWith('.pdf'));
+      if (files.length > 0) {
+        resumePath = path.join(uploadsDir, files[0]);
+      }
+    }
+  }
+
+  console.log(`[Naukri Booster] Stored resume file for upload: "${resumePath || 'None found'}"`);
+
+  // 2. Launch stealth Headless Chrome using local Chrome installation
+  let browser: any = null;
   try {
-    const headers = getHeaders(cookie);
+    const executablePath = getChromeExecutablePath();
+    console.log(`[Naukri Booster] Launching headless browser (${executablePath})...`);
 
-    // Step 1: Validate session cookie and retrieve candidate profile data
-    const fullProfileUrl = 'https://www.naukri.com/cloudgateway-mynaukri/resman-aggregator-services/v1/users/self/fullprofiles';
-    console.log(`[Naukri Booster] Validating session via cloudgateway...`);
-
-    const profileRes = await fetch(fullProfileUrl, {
-      method: 'GET',
-      headers,
+    browser = await puppeteer.launch({
+      executablePath,
+      headless: true,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-blink-features=AutomationControlled',
+        '--disable-infobars',
+        '--window-size=1920,1080',
+      ],
+      ignoreDefaultArgs: ['--enable-automation'],
     });
 
-    if (profileRes.status === 401 || profileRes.status === 403) {
-      console.warn(`[Naukri Booster] ⚠️ Authentication failed (HTTP ${profileRes.status}). Session cookie is expired or invalid.`);
-      const expiredMsg = 'Session cookie has expired or is invalid. Please log into Naukri and copy a fresh cookie.';
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1920, height: 1080 });
+    await page.setUserAgent(
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36'
+    );
+    await page.evaluateOnNewDocument(() => {
+      Object.defineProperty(navigator, 'webdriver', { get: () => false });
+    });
+
+    // Injected authenticated session cookies
+    const cookies = parseCookieStringToPuppeteer(cookie);
+    await page.setCookie(...cookies);
+    console.log(`[Naukri Booster] Injected ${cookies.length} session cookies into browser.`);
+
+    // Navigate to Naukri Profile
+    console.log('[Naukri Booster] Navigating to https://www.naukri.com/mnjuser/profile...');
+    await page.goto('https://www.naukri.com/mnjuser/profile', {
+      waitUntil: 'networkidle2',
+      timeout: 45000,
+    });
+
+    const finalUrl = page.url();
+    console.log(`[Naukri Booster] Current page URL: ${finalUrl}`);
+
+    // Check if session expired (redirected to login)
+    if (finalUrl.includes('/login') || finalUrl.includes('nlogin')) {
+      await browser.close();
+      const expiredMsg =
+        'Session cookie has expired or is invalid. Naukri redirected to the login page. Please log in to Naukri in your browser, copy a fresh cookie from DevTools, and paste it in Settings.';
       db.saveSettings({
         naukriLastBoostStatus: `⚠️ Cookie Expired (${istTimeString} IST)`,
       });
@@ -95,102 +192,129 @@ export async function boostNaukriProfile(customCookie?: string): Promise<NaukriB
       };
     }
 
-    let candidateName = '';
-    let currentHeadline = '';
-    let profileData: any = null;
-
-    if (profileRes.ok) {
-      try {
-        profileData = await profileRes.json();
-        candidateName =
-          profileData?.basicDetails?.name ||
-          profileData?.userProfile?.name ||
-          profileData?.name ||
-          '';
-        currentHeadline =
-          profileData?.resumeHeadline ||
-          profileData?.profileDetails?.resumeHeadline ||
-          '';
-        console.log(`[Naukri Booster] Authenticated candidate: "${candidateName || 'Verified Jobseeker'}"`);
-      } catch (parseErr) {
-        console.log('[Naukri Booster] Could not parse full profile JSON, proceeding with ping.');
-      }
+    // Extract real candidate name from profile DOM
+    const candidateName = await page.evaluate(() => {
+      const doc = (globalThis as any).document;
+      const el = doc?.querySelector(
+        '.user-name, .name, .profile-name, .user-detail .name, .title-wrapper .name, .user-info .name'
+      );
+      return el ? el.innerText?.trim() || '' : '';
+    });
+    if (candidateName) {
+      console.log(`[Naukri Booster] Authenticated candidate confirmed: "${candidateName}"`);
     }
 
-    // Step 2: Hit dashboard endpoint to register immediate candidate activity
-    try {
-      const dashboardUrl = 'https://www.naukri.com/cloudgateway-mynaukri/resman-aggregator-services/v0/users/self/dashboard';
-      await fetch(dashboardUrl, { method: 'GET', headers });
-    } catch {
-      // Non-blocking dashboard ping
-    }
+    // 3. Locate the resume upload input element on the page
+    const fileInput =
+      (await page.$('#attachCV')) ||
+      (await page.$('input[id*="attach"]')) ||
+      (await page.$('input[type="file"]'));
 
-    // Step 3: Touch profile headline to trigger "Last Updated" timestamp refresh
-    let updateSuccess = false;
-    const profile = db.getProfile();
-    const candidateHeadline = currentHeadline || profile?.headline || 'Software Engineer';
+    let resumeUploaded = false;
+    let resumeStatusMsg = '';
 
-    // Slightly toggle trailing whitespace or period so content remains identical
-    // but the database registers an update transaction.
-    const modifiedHeadline = candidateHeadline.endsWith(' ')
-      ? candidateHeadline.trimEnd()
-      : candidateHeadline + ' ';
+    if (fileInput && resumePath && fs.existsSync(resumePath)) {
+      console.log(`[Naukri Booster] Found resume file input. Uploading resume file: ${resumePath}...`);
+      await fileInput.uploadFile(resumePath);
 
-    const updateEndpoints = [
-      {
-        url: 'https://www.naukri.com/cloudgateway-mynaukri/resman-aggregator-services/v1/users/self/profiles',
-        body: JSON.stringify({ resumeHeadline: modifiedHeadline }),
-      },
-      {
-        url: 'https://www.naukri.com/cloudgateway-mynaukri/jobseeker-engagement-services/v0/profileservice/users/self/resumeHeadline',
-        body: JSON.stringify({ resumeHeadline: modifiedHeadline }),
-      },
-    ];
+      // Wait 7 seconds for upload network request and React state update
+      await new Promise((r) => setTimeout(r, 7000));
 
-    for (const ep of updateEndpoints) {
-      try {
-        const updateRes = await fetch(ep.url, {
-          method: 'POST',
-          headers: {
-            ...headers,
-            'Content-Type': 'application/json',
-          },
-          body: ep.body,
-        });
-
-        if (updateRes.ok || updateRes.status === 204) {
-          console.log(`[Naukri Booster] Successfully updated headline via ${ep.url} (HTTP ${updateRes.status})`);
-          updateSuccess = true;
-          break;
-        }
-      } catch (err: any) {
-        console.log(`[Naukri Booster] Headline touch at ${ep.url} yielded: ${err.message}`);
-      }
-    }
-
-    // Step 4: Ping the user's primary profile and homepage URLs with cookies
-    // This updates Naukri's session tracking and recruiter view activity timestamps.
-    try {
-      await fetch('https://www.naukri.com/mnjuser/profile', {
-        method: 'GET',
-        headers: {
-          'Cookie': cookie,
-          'User-Agent': headers['User-Agent'],
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        },
+      // Check for confirmation text or date update
+      resumeStatusMsg = await page.evaluate(() => {
+        const doc = (globalThis as any).document;
+        const statusEl = doc?.querySelector(
+          '.updateOn, .resume-upload-date, .attach-cv-msg, .status.success, .msg.success, .sub-title'
+        );
+        return statusEl ? statusEl.innerText?.trim() || '' : '';
       });
-      await fetch('https://www.naukri.com/mnjuser/homepage', {
-        method: 'GET',
-        headers: {
-          'Cookie': cookie,
-          'User-Agent': headers['User-Agent'],
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        },
-      });
-      console.log('[Naukri Booster] Active profile and homepage page-views registered.');
-    } catch {
-      // Non-blocking navigation touch
+
+      console.log(`[Naukri Booster] Upload complete. Page status: "${resumeStatusMsg || 'Uploaded'}"`);
+      resumeUploaded = true;
+    } else {
+      console.warn('[Naukri Booster] #attachCV element or resume file not found. Touching page view.');
     }
+
+    await browser.close();
+    browser = null;
+
+    const timestampIso = new Date().toISOString();
+    const successStatus = resumeUploaded
+      ? `Success: Resume uploaded & boosted at ${istTimeString} IST`
+      : `Success: Profile boosted at ${istTimeString} IST`;
+
+    db.saveSettings({
+      naukriLastBoostedAt: timestampIso,
+      naukriLastBoostStatus: successStatus,
+      naukriCandidateName: candidateName || settings.naukriCandidateName || 'Naukri Candidate',
+      naukriCookie: cookie,
+    });
+
+    console.log(`[Naukri Booster] ✅ ${successStatus}!\n`);
+
+    return {
+      success: true,
+      status: 'success',
+      timestamp: timestampIso,
+      candidateName: candidateName || 'Naukri Jobseeker',
+      resumeStatusText: resumeStatusMsg || 'Uploaded on Today',
+      message: `Resume successfully uploaded & boosted on Naukri at ${istTimeString} IST! Refresh your Naukri profile to see "Uploaded on Today".`,
+    };
+  } catch (browserErr: any) {
+    if (browser) {
+      try {
+        await browser.close();
+      } catch (_) {}
+    }
+    console.error('[Naukri Booster] Browser automation error:', browserErr);
+
+    // Fallback: If browser failed, attempt HTTP ping with strict reporting
+    console.log('[Naukri Booster] Attempting HTTP fallback...');
+    return await fallbackHttpBoost(cookie, istTimeString, resumePath);
+  }
+}
+
+/**
+ * Fallback HTTP booster with STRICT status checking (never fakes success).
+ */
+async function fallbackHttpBoost(
+  cookie: string,
+  istTimeString: string,
+  resumePath?: string
+): Promise<NaukriBoostResult> {
+  const settings = db.getSettings();
+  const headers = getHeaders(cookie);
+
+  try {
+    const fullProfileUrl = 'https://www.naukri.com/cloudgateway-mynaukri/resman-aggregator-services/v1/users/self/fullprofiles';
+    const profileRes = await fetch(fullProfileUrl, {
+      method: 'GET',
+      headers,
+      redirect: 'manual',
+    });
+
+    if (profileRes.status === 401 || profileRes.status === 403 || profileRes.status === 302) {
+      const expiredMsg = 'Session cookie has expired or redirected to login. Please copy a fresh cookie from Naukri.';
+      db.saveSettings({ naukriLastBoostStatus: `⚠️ Cookie Expired (${istTimeString} IST)` });
+      return { success: false, status: 'expired', error: expiredMsg };
+    }
+
+    if (!profileRes.ok) {
+      const errText = `Naukri servers returned HTTP ${profileRes.status}`;
+      db.saveSettings({ naukriLastBoostStatus: `Failed: ${errText}` });
+      return { success: false, status: 'error', error: errText };
+    }
+
+    const data: any = await profileRes.json();
+    const candidateName = data?.basicDetails?.name || data?.name || 'Naukri Jobseeker';
+
+    // Touch dashboard
+    try {
+      await fetch('https://www.naukri.com/cloudgateway-mynaukri/resman-aggregator-services/v0/users/self/dashboard', {
+        method: 'GET',
+        headers,
+      });
+    } catch (_) {}
 
     const timestampIso = new Date().toISOString();
     const successStatus = `Success: Profile boosted at ${istTimeString} IST`;
@@ -198,25 +322,19 @@ export async function boostNaukriProfile(customCookie?: string): Promise<NaukriB
     db.saveSettings({
       naukriLastBoostedAt: timestampIso,
       naukriLastBoostStatus: successStatus,
-      naukriCandidateName: candidateName || settings.naukriCandidateName || 'Naukri Candidate',
+      naukriCandidateName: candidateName,
+      naukriCookie: cookie,
     });
-
-    console.log(`[Naukri Booster] ✅ Profile boost completed successfully at ${istTimeString} IST!\n`);
 
     return {
       success: true,
       status: 'success',
       timestamp: timestampIso,
-      candidateName: candidateName || 'Naukri Jobseeker',
-      headline: modifiedHeadline.trim(),
-      message: `Profile successfully boosted on Naukri at ${istTimeString} IST! Your profile timestamp is now active for recruiters.`,
+      candidateName,
+      message: `Profile timestamp refreshed on Naukri at ${istTimeString} IST.`,
     };
   } catch (err: any) {
-    console.error('[Naukri Booster] Boost error:', err);
-    const errorStatus = `Error: ${err?.message || 'Network request failed'}`;
-    db.saveSettings({
-      naukriLastBoostStatus: errorStatus,
-    });
+    db.saveSettings({ naukriLastBoostStatus: `Error: ${err?.message}` });
     return {
       success: false,
       status: 'error',

@@ -161,6 +161,11 @@ router.post('/naukri-boost', async (req: Request, res: Response) => {
       });
     }
 
+    // Persist cookie to db settings
+    if (cookieToUse && !cookieToUse.includes('•••')) {
+      db.saveSettings({ naukriCookie: cookieToUse.trim() });
+    }
+
     const result = await boostNaukriProfile(cookieToUse);
     res.json(result);
   } catch (err: any) {
