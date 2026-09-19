@@ -1,13 +1,15 @@
 import { Router, Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
-import { db, JobListing } from '../db/index.js';
-import { analyzeJobMatch } from '../services/gemini.js';
+import { db, JobListing, OutreachRecord, ReferralContact } from '../db/index.js';
+import { analyzeJobMatch, generateReferralPitch } from '../services/gemini.js';
 import {
   discoverWorldwideJobs,
   parseDirectJobLink,
   validateGoogleFormStatus,
   isJobInTrackedPipeline,
 } from '../services/jobDiscovery.js';
+import { discoverDecisionMakers, toReferralContact } from '../services/contactDiscovery.js';
+import { sendReferralEmail } from '../services/email.js';
 
 const router = Router();
 
@@ -144,6 +146,245 @@ router.post('/import-discovered', async (req: Request, res: Response) => {
   } catch (err: any) {
     console.error('Error importing job:', err);
     res.status(500).json({ success: false, error: err?.message || 'Failed to import job' });
+  }
+});
+
+// 1-CLICK AUTONOMOUS JOB AGENT
+// (Imports job, computes match, discovers decision makers, generates personalized pitches, and dispatches via Gmail)
+router.post('/run-agent', async (req: Request, res: Response) => {
+  try {
+    const profile = db.getProfile();
+    if (!profile || !profile.skills || profile.skills.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Please upload your resume in the Resume & Profile tab first so the agent can personalize your referral pitches.',
+      });
+    }
+
+    const {
+      title,
+      company,
+      location,
+      url,
+      description,
+      source,
+      visaSponsorship,
+      remote,
+      postedTime,
+      experienceRange,
+      googleFormUrl,
+      googleFormStatus,
+      googleFormStatusReason,
+      companyId,
+      recruiterName,
+    } = req.body;
+
+    let finalTitle = title || 'Software Engineer';
+    let finalCompany = company || 'Tech Company';
+    let finalLocation = location || 'Remote';
+    let finalDesc = description || `${finalTitle} at ${finalCompany}`;
+    let finalRemote = remote;
+    let finalVisa = visaSponsorship;
+
+    const detectedFormUrl =
+      googleFormUrl ||
+      (url?.includes('forms.gle') || url?.includes('docs.google.com/forms') ? url : undefined);
+
+    let finalGoogleFormStatus = googleFormStatus;
+    let finalGoogleFormStatusReason = googleFormStatusReason;
+
+    if (detectedFormUrl && !finalGoogleFormStatus) {
+      try {
+        const check = await validateGoogleFormStatus(detectedFormUrl);
+        finalGoogleFormStatus = check.status;
+        finalGoogleFormStatusReason = check.reason;
+      } catch (_) {}
+    }
+
+    // Step 1: Create and analyze job
+    let job: JobListing = {
+      id: uuidv4(),
+      title: finalTitle,
+      company: finalCompany,
+      location: finalLocation,
+      url: url || '',
+      description: finalDesc,
+      status: 'saved',
+      source: source || 'radar',
+      visaSponsorship: Boolean(finalVisa),
+      remote: Boolean(finalRemote),
+      applyUrl: url || undefined,
+      googleFormUrl: detectedFormUrl || undefined,
+      googleFormStatus: finalGoogleFormStatus,
+      googleFormStatusReason: finalGoogleFormStatusReason,
+      companyId,
+      recruiterName,
+      postedTime,
+      experienceRange,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    // Auto-analyze match fit with Gemini
+    try {
+      console.log(`[Job Agent] Auto-analyzing job "${job.title}" at "${job.company}" with Gemini...`);
+      const analysis = await analyzeJobMatch(job.description, profile);
+      job.matchScore = analysis.matchScore;
+      job.matchSummary = analysis.matchSummary;
+      job.strengths = analysis.strengths;
+      job.missingSkills = analysis.missingSkills;
+      if (analysis.extractedCompany && job.company === 'Tech Company') {
+        job.company = analysis.extractedCompany;
+      }
+      if (analysis.extractedTitle && job.title === 'Software Engineer') {
+        job.title = analysis.extractedTitle;
+      }
+      job.status = 'analyzed';
+    } catch (analysisErr) {
+      console.warn('[Job Agent] Analysis skipped due to error:', analysisErr);
+    }
+
+    // Save job into database
+    job = db.saveJob(job);
+    console.log(`[Job Agent] Job "${job.title}" saved with ID ${job.id}`);
+
+    // Step 2: Auto-discover 5-6 decision makers
+    console.log(`[Job Agent] Discovering decision makers for "${job.company}"...`);
+    const discoveredList = await discoverDecisionMakers({
+      company: job.company,
+      domain: undefined,
+      jobTitle: job.title,
+      jobId: job.id,
+    });
+
+    const savedContacts: ReferralContact[] = [];
+    for (const d of discoveredList) {
+      const contact = toReferralContact(d, job.id, job.company);
+      const saved = db.saveContact(contact);
+      savedContacts.push(saved);
+    }
+    console.log(`[Job Agent] Discovered & saved ${savedContacts.length} contacts for "${job.company}"`);
+
+    // Step 3: Check Gmail configuration and dispatch outreach
+    const settings = db.getSettings();
+    const hasGmail = Boolean(settings.gmailAddress && settings.gmailAppPassword);
+
+    const sentResults: any[] = [];
+    const followUpDays = settings.defaultFollowUpDays || 3;
+    const followUpDate = new Date();
+    followUpDate.setDate(followUpDate.getDate() + followUpDays);
+
+    if (hasGmail) {
+      // Find contacts with deliverable emails
+      const deliverableContacts = savedContacts.filter(
+        (c) => c.email && c.email.includes('@') && !c.email.includes('example.com')
+      );
+
+      // Take up to 3 priority contacts (mix of managers, recruiters, peers)
+      const targetContacts = deliverableContacts.slice(0, 3);
+
+      for (let i = 0; i < targetContacts.length; i++) {
+        const contact = targetContacts[i];
+        try {
+          const pitchType =
+            contact.contactType === 'manager' ? 'hiring_manager' : 'peer_referral';
+
+          console.log(`[Job Agent] [${i + 1}/${targetContacts.length}] Generating pitch for ${contact.name} (${contact.role})...`);
+          const pitch = await generateReferralPitch({
+            job,
+            contact,
+            profile,
+            pitchType,
+          });
+
+          console.log(`[Job Agent] [${i + 1}/${targetContacts.length}] Sending referral email to ${contact.email}...`);
+          const sendResult = await sendReferralEmail({
+            to: contact.email!,
+            subject: pitch.subject,
+            body: pitch.body,
+            attachResume: settings.autoAttachResume !== false,
+            resumeFilePath: profile.resumeFilePath,
+            resumeFileName: profile.resumeFileName || `${profile.fullName || 'Resume'}.pdf`,
+          });
+
+          // Record outreach in db
+          const outreachRecord: OutreachRecord = {
+            id: uuidv4(),
+            jobId: job.id,
+            contactId: contact.id,
+            channel: 'email',
+            subject: pitch.subject,
+            body: pitch.body,
+            pitchType,
+            status: 'sent',
+            recipientEmail: contact.email!,
+            recipientName: contact.name,
+            hasAttachment: settings.autoAttachResume !== false && !!profile.resumeFilePath,
+            sentAt: new Date().toISOString(),
+            followUpDue: followUpDate.toISOString(),
+            createdAt: new Date().toISOString(),
+          };
+          db.saveOutreach(outreachRecord);
+
+          contact.status = 'emailed';
+          db.saveContact(contact);
+
+          sentResults.push({
+            name: contact.name,
+            role: contact.role,
+            email: contact.email,
+            subject: pitch.subject,
+            messageId: sendResult.messageId,
+            success: true,
+          });
+        } catch (mailErr: any) {
+          console.error(`[Job Agent] Failed sending email to ${contact.name}:`, mailErr?.message);
+          sentResults.push({
+            name: contact.name,
+            role: contact.role,
+            email: contact.email,
+            success: false,
+            error: mailErr?.message,
+          });
+        }
+      }
+
+      if (sentResults.some((r) => r.success)) {
+        job.status = 'outreach_sent';
+      } else if (savedContacts.length > 0) {
+        job.status = 'contact_found';
+      }
+    } else {
+      if (savedContacts.length > 0) {
+        job.status = 'contact_found';
+      }
+    }
+
+    job.updatedAt = new Date().toISOString();
+    job = db.saveJob(job);
+
+    const successfulEmails = sentResults.filter((r) => r.success).length;
+    let message = '';
+    if (successfulEmails > 0) {
+      message = `⚡ Autonomous Agent finished! Discovered ${savedContacts.length} contacts and dispatched ${successfulEmails} personalized referral emails via Gmail.`;
+    } else if (!hasGmail) {
+      message = `⚡ Job imported and ${savedContacts.length} contacts discovered! Connect your Gmail in Settings to enable automatic 1-click email sending.`;
+    } else {
+      message = `⚡ Job imported and ${savedContacts.length} contacts discovered! (No direct emails available; profiles saved to roster for LinkedIn outreach).`;
+    }
+
+    res.json({
+      success: true,
+      job,
+      contactsCount: savedContacts.length,
+      emailsSent: successfulEmails,
+      hasGmail,
+      results: sentResults,
+      message,
+    });
+  } catch (err: any) {
+    console.error('Error running autonomous job agent:', err);
+    res.status(500).json({ success: false, error: err?.message || 'Job agent failed' });
   }
 });
 

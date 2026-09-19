@@ -8,11 +8,13 @@ export interface DiscoveredJob {
   company: string;
   location: string;
   url: string;
+  applyUrl?: string;
   description: string;
   source:
     | 'linkedin'
     | 'linkedin_company'
     | 'unstop'
+    | 'instahyre'
     | 'arbeitnow'
     | 'remotive'
     | 'remoteok'
@@ -51,6 +53,7 @@ export interface JobSearchFilters {
     | 'linkedin'
     | 'linkedin_company'
     | 'unstop'
+    | 'instahyre'
     | 'google_form'
     | 'portal'
     | 'arbeitnow'
@@ -206,6 +209,103 @@ export function isLocationEligible(
   }
 
   return false;
+}
+
+/**
+ * Strict patterns for non-software / out-of-scope fields that must never appear
+ * when searching jobs for a software/technology candidate.
+ */
+export const EXCLUDED_DOMAIN_TITLE_PATTERNS: RegExp[] = [
+  // Chemical, Materials, Petrochemical & Refinery
+  /\bchemical\b/i,
+  /\bpetro(?:leum|chemical)\b/i,
+  /\brefinery\b/i,
+  /\bsynthesis\b/i,
+  /\bmetallurg/i,
+  /\bpolymer\b/i,
+  /\bcryogenic/i,
+
+  // Non-Software Engineering Disciplines
+  /\bmechanical\s+engineer/i,
+  /\bcivil\s+engineer/i,
+  /\belectrical\s+engineer/i,
+  /\bconstruction\b/i,
+  /\bstructural\s+engineer/i,
+  /\baerospace\s+engineer/i,
+  /\bhardware\s+engineer/i,
+  /\bmaintenance\s+engineer/i,
+  /\bhvac\b/i,
+  /\bautomotive\s+engineer/i,
+
+  // Science, Laboratory, Clinical, Healthcare & Pharma
+  /\blaboratory\b/i,
+  /\blab\s+(?:technician|assistant)\b/i,
+  /\bclinical\b/i,
+  /\bnurse\b/i,
+  /\bnursing\b/i,
+  /\bpharmac/i,
+  /\bphysician\b/i,
+  /\bmedical\s+(?:officer|assistant|coder|doctor)/i,
+  /\bhealthcare\s+assistant/i,
+  /\bdentist\b/i,
+
+  // Accounting, Finance, Tax & Audit (non-software)
+  /\baccountant\b/i,
+  /\baccounting\b/i,
+  /\baudit(?:or)?\b/i,
+  /\btax\s+(?:consultant|specialist|manager)\b/i,
+  /\bbookkeeper\b/i,
+  /\bfinance\s+manager\b/i,
+  /\bfinancial\s+controller\b/i,
+
+  // Procurement, Supply Chain & Logistics
+  /\bprocurement\b/i,
+  /\bsupply\s+chain\b/i,
+  /\blogistiker\b/i,
+  /\blogistics\b/i,
+  /\bwarehouse\b/i,
+  /\bfreight\b/i,
+
+  // Non-technical Sales, Marketing & Operations
+  /\binside\s+sales\b/i,
+  /\boutside\s+sales\b/i,
+  /\bsales\s+(?:representative|executive|consultant|agent|operations)\b/i,
+  /\btelecaller\b/i,
+  /\btelemarketing\b/i,
+  /\bcustomer\s+(?:service|support|care)\s+agent\b/i,
+  /\breceptionist\b/i,
+  /\breal\s+estate\b/i,
+  /\bfundraising\b/i,
+  /\bcook\b/i,
+  /\bchef\b/i,
+  /\bdriver\b/i,
+  /\bclerk\b/i,
+];
+
+export const SOFTWARE_TITLE_KEYWORDS: string[] = [
+  'software', 'developer', 'engineer', 'programmer', 'architect', 'full stack', 'fullstack',
+  'backend', 'back end', 'frontend', 'front end', 'devops', 'sre', 'cloud', 'data engineer',
+  'data scientist', 'data science', 'machine learning', 'ai', 'ml', 'qa engineer', 'sdet',
+  'tech lead', 'technical lead', 'engineering manager', 'cto', 'systems engineer',
+  'mobile', 'android', 'ios', 'web developer', 'security engineer', 'platform engineer'
+];
+
+/**
+ * Validates that a job title belongs to tech/software engineering and does not match
+ * excluded out-of-scope fields (e.g. chemical engineer, civil engineer, accountant).
+ */
+export function isJobDomainRelevant(title: string = '', candidateField = 'Software'): boolean {
+  if (!title) return false;
+  const cleanTitle = title.trim();
+
+  // Hard rejection on out-of-scope negative patterns
+  for (const pattern of EXCLUDED_DOMAIN_TITLE_PATTERNS) {
+    if (pattern.test(cleanTitle)) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 /**
@@ -968,6 +1068,194 @@ export async function searchCompanyCareerPortals(
 }
 
 /**
+ * Discovers live tech & startup job postings from Instahyre (instahyre.com)
+ * Uses official Instahyre REST API (v1/job_search) for instant verified openings,
+ * with Brave search scraping as a resilient fallback.
+ */
+export async function searchInstahyreJobs(
+  keywordsOrParams: string | { keywords?: string; location?: string } = 'Software Engineer',
+  locationParam = 'Worldwide',
+  companyFilter?: string
+): Promise<DiscoveredJob[]> {
+  const keywords = typeof keywordsOrParams === 'object' ? keywordsOrParams.keywords : keywordsOrParams;
+  const location = typeof keywordsOrParams === 'object' ? (keywordsOrParams.location || locationParam) : locationParam;
+  const cleanKeywords = (keywords || 'Software Engineer').trim();
+  const jobs: DiscoveredJob[] = [];
+  const seenUrls = new Set<string>();
+
+  // Helper to extract primary technical skill from keywords
+  const extractPrimarySkill = (kw: string): string => {
+    const knownSkills = [
+      'Python', 'Java', 'React', 'Node.js', 'Node', 'Go', 'Golang', 'Rust', 'Ruby',
+      'C++', 'C#', '.NET', 'PHP', 'Swift', 'Kotlin', 'Flutter', 'Angular', 'Vue',
+      'Full Stack', 'FullStack', 'Backend', 'Frontend', 'DevOps', 'Cloud', 'AWS',
+      'Docker', 'Kubernetes', 'Data Engineer', 'Machine Learning', 'AI', 'NLP',
+      'Data Science', 'QA', 'SDET', 'Cybersecurity', 'Android', 'iOS'
+    ];
+    for (const s of knownSkills) {
+      const escaped = s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      if (new RegExp(`(?:^|\\b)${escaped}(?:\\b|$)`, 'i').test(kw)) {
+        return s;
+      }
+    }
+    return kw.split(/[\s,/]+/)[0] || 'Software';
+  };
+
+  const primarySkill = extractPrimarySkill(cleanKeywords);
+
+  // Strategy 1: Direct Instahyre Official REST API
+  try {
+    const apiUrl = `https://www.instahyre.com/api/v1/job_search?skills=${encodeURIComponent(primarySkill)}`;
+    const jsonStr = await fetchWithCurl(apiUrl, 7000);
+
+    if (jsonStr && jsonStr.startsWith('{')) {
+      const data = JSON.parse(jsonStr) as any;
+      const objects: any[] = data.objects || [];
+
+      for (const obj of objects) {
+        if (!obj || !obj.id) continue;
+        const title = String(obj.title || obj.candidate_title || 'Software Engineer').trim();
+        const company = String(obj.employer?.company_name || 'Tech Company').trim();
+        const jobLoc = String(obj.locations || 'India').trim();
+        const url = String(obj.public_url || `https://www.instahyre.com/job-${obj.id}/`).trim();
+
+        if (seenUrls.has(url)) continue;
+        seenUrls.add(url);
+
+        // Domain guardrail: reject non-software roles
+        if (!isJobDomainRelevant(title)) continue;
+
+        const skills = Array.isArray(obj.keywords) && obj.keywords.length > 0 ? obj.keywords : [primarySkill];
+        const isRemote = jobLoc.toLowerCase().includes('remote') || title.toLowerCase().includes('remote') || Boolean(obj.accept_outstation);
+        const note = obj.employer?.instahyre_note || obj.employer?.company_tagline || '';
+
+        // Company filter
+        if (companyFilter) {
+          const cleanComp = companyFilter.toLowerCase().trim();
+          if (!company.toLowerCase().includes(cleanComp)) continue;
+        }
+
+        // Location filter
+        if (location && !isLocationEligible(jobLoc, location, isRemote)) {
+          continue;
+        }
+
+        jobs.push({
+          id: `instahyre-${obj.id}`,
+          title,
+          company,
+          location: isRemote ? 'Remote' : (jobLoc || 'India'),
+          url,
+          applyUrl: url,
+          description: `⚡ Instahyre Verified Opportunity: ${title} at ${company} (${jobLoc}). Required Skills: ${skills.join(', ')}. ${note ? `About Company: ${note}` : ''}`,
+          source: 'instahyre',
+          visaSponsorship: false,
+          remote: isRemote,
+          postedTime: 'Active Opening on Instahyre',
+          experienceRange: '1-6 years',
+          matchScore: 88,
+          matchingSkills: skills,
+        });
+
+        if (jobs.length >= 35) break;
+      }
+
+      if (jobs.length > 0) {
+        console.log(`[Instahyre API] Discovered ${jobs.length} active opportunities for "${primarySkill}"`);
+        return jobs;
+      }
+    }
+  } catch (apiErr: any) {
+    console.warn('[Instahyre API] API query encountered issue, trying fallback search:', apiErr?.message || apiErr);
+  }
+
+  // Strategy 2: Resilient Fallback via Web Index
+  try {
+    let query = `site:instahyre.com/job- "${cleanKeywords}"`;
+    if (companyFilter) {
+      query = `site:instahyre.com/job- "${companyFilter}" "${cleanKeywords}"`;
+    } else if (location && !location.toLowerCase().includes('worldwide') && !location.toLowerCase().includes('all')) {
+      query = `site:instahyre.com/job- "${cleanKeywords}" "${location}"`;
+    }
+
+    const searchUrl = `https://search.brave.com/search?q=${encodeURIComponent(query).replace(/%20/g, '+')}`;
+    const html = await fetchWithCurl(searchUrl, 6000);
+
+    if (html && html.length > 500) {
+      const regex = /title:"([^"]+?)",url:"(https:\/\/www\.instahyre\.com\/job-[^"]+)"(?:,full_title:[^,]+)?,description:"([^"]*)"/gi;
+      let m: RegExpExecArray | null;
+
+      while ((m = regex.exec(html)) !== null) {
+        const rawTitle = m[1]
+          .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+          .trim();
+        const url = m[2].split('?')[0];
+        const rawDesc = m[3]
+          .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+          .replace(/<[^>]+>/g, ' ')
+          .trim();
+
+        if (seenUrls.has(url)) continue;
+        seenUrls.add(url);
+
+        let title = rawTitle.replace(/\s+job\s+at\s+.*$/i, '').replace(/\s*-\s*Instahyre.*$/i, '').trim();
+        let company = 'Tech Company';
+        let jobLocation = location || 'India';
+        let experienceRange = '2-5 years';
+        let skills: string[] = [];
+
+        const snippetMatch = rawDesc.match(/^(.*?)\s+is looking for\s+(?:a|an)?\s*(.*?)\s+in\s+([A-Za-z\s,/-]+?)\s+with\s+([0-9-]+\s*(?:years|yrs)?)\s+of experience(?:\s+in\s+([^.]+))?/i);
+        if (snippetMatch) {
+          company = snippetMatch[1].trim();
+          if (!title || title.length < 3) title = snippetMatch[2].trim();
+          jobLocation = snippetMatch[3].trim();
+          experienceRange = snippetMatch[4].trim();
+          if (snippetMatch[5]) {
+            skills = snippetMatch[5].split(',').map((s) => s.replace(/etc\.?/i, '').trim()).filter(Boolean).slice(0, 6);
+          }
+        } else {
+          const titleMatch = rawTitle.match(/^(.*?)\s+job\s+at\s+(.*?)(?:\s*-\s*Instahyre|\.\.\.)?$/i);
+          if (titleMatch) {
+            title = titleMatch[1].trim();
+            company = titleMatch[2].replace(/-.*$/, '').trim();
+          }
+        }
+
+        const isRemote =
+          rawTitle.toLowerCase().includes('remote') ||
+          rawDesc.toLowerCase().includes('remote') ||
+          jobLocation.toLowerCase().includes('remote');
+
+        // Domain guardrail: reject non-software roles
+        if (!isJobDomainRelevant(title)) continue;
+
+        jobs.push({
+          id: `instahyre-${uuidv4().substring(0, 8)}`,
+          title,
+          company,
+          location: isRemote ? 'Remote' : (jobLocation || 'India'),
+          url,
+          applyUrl: url,
+          description: `⚡ Instahyre Opportunity: ${title} at ${company} (${jobLocation}). Required Experience: ${experienceRange}. Skills: ${skills.join(', ')}. Details: ${rawDesc}`,
+          source: 'instahyre',
+          visaSponsorship: false,
+          remote: isRemote,
+          postedTime: 'Active Opening',
+          experienceRange,
+          matchScore: 85,
+          matchingSkills: skills.length > 0 ? skills : [cleanKeywords],
+        });
+      }
+    }
+  } catch (err) {
+    console.warn('[Instahyre Search] Resilient search error:', err);
+  }
+
+  return jobs;
+}
+
+
+/**
  * Expands candidate profile into multiple intelligent search queries (roles, stack pairs, level)
  */
 export function expandSearchTaxonomy(
@@ -1034,6 +1322,17 @@ export async function searchArbeitnowJobs(
     const rawJobs: any[] = json?.data || [];
 
     const filtered = rawJobs.filter((job) => {
+      if (!job || !job.title) return false;
+      if (!isJobDomainRelevant(job.title)) return false;
+
+      // Must be related to software/tech
+      const titleLower = (job.title || '').toLowerCase();
+      const tags = Array.isArray(job.tags) ? job.tags.map((t: string) => String(t).toLowerCase()) : [];
+      const isTech =
+        SOFTWARE_TITLE_KEYWORDS.some((kw) => titleLower.includes(kw)) ||
+        tags.some((t: string) => ['it', 'software', 'development', 'programming', 'tech', 'data', 'devops', 'cloud'].includes(t));
+      if (!isTech) return false;
+
       if (visaSponsorshipOnly && !job.visa_sponsorship) return false;
       if (remoteOnly && !job.remote) return false;
       if (!isLocationEligible(job.location || (job.remote ? 'Remote Worldwide' : ''), location, Boolean(job.remote))) {
@@ -1100,6 +1399,7 @@ export async function searchRemoteOKJobs(
     const validJobs = raw.filter((d) => d && d.position && d.company);
 
     const filtered = validJobs.filter((job) => {
+      if (!isJobDomainRelevant(job.position || '')) return false;
       const loc = job.location || 'Remote Worldwide';
       if (!isLocationEligible(loc, location, true)) {
         return false;
@@ -1165,6 +1465,7 @@ export async function searchJobicyJobs(
     const rawJobs: any[] = json.jobs || [];
 
     const filtered = rawJobs.filter((job) => {
+      if (!isJobDomainRelevant(job.jobTitle || '')) return false;
       const geo = job.jobGeo || 'Remote Worldwide';
       if (!isLocationEligible(geo, location, true)) {
         return false;
@@ -1249,6 +1550,10 @@ export async function searchWeWorkRemotelyJobs(
         const company = parts.length > 1 ? parts[0].trim() : 'Tech Company';
         const title = parts.length > 1 ? parts.slice(1).join(':').trim() : rawTitle;
 
+        if (!isJobDomainRelevant(title)) {
+          continue;
+        }
+
         if (!isLocationEligible(region, location, true)) {
           continue;
         }
@@ -1308,6 +1613,7 @@ export async function searchHimalayasJobs(
 
     const filtered = rawJobs.filter((job) => {
       if (!job || !job.title || !job.companyName) return false;
+      if (!isJobDomainRelevant(job.title)) return false;
       const restrictions = (job.locationRestrictions || []).join(' ');
       if (!isLocationEligible(restrictions, location, true)) {
         return false;
@@ -1370,6 +1676,7 @@ export async function searchWorkingNomadsJobs(
 
     const filtered = rawJobs.filter((job) => {
       if (!job || !job.title || !job.company_name) return false;
+      if (!isJobDomainRelevant(job.title)) return false;
       const loc = job.location || 'Remote Worldwide';
       if (!isLocationEligible(loc, location, true)) {
         return false;
@@ -1562,6 +1869,8 @@ export async function searchRemotiveJobs(
     const rawJobs: any[] = json?.jobs || [];
 
     const filtered = rawJobs.filter((job) => {
+      if (!job || !job.title) return false;
+      if (!isJobDomainRelevant(job.title)) return false;
       const candLoc = job.candidate_required_location || 'Remote Worldwide';
       if (!isLocationEligible(candLoc, location, true)) {
         return false;
@@ -1682,27 +1991,95 @@ Return strictly a JSON object:
 }
 
 /**
- * Calculates quick keyword alignment between a job and candidate skills
+ * Calculates keyword and role alignment between a job and candidate profile
+ * using exact regex word-boundaries to prevent partial-substring false positives.
  */
 function scoreJobAlignment(job: DiscoveredJob, profile: UserProfile | null): { score: number; matched: string[] } {
   if (!profile || !profile.skills || profile.skills.length === 0) {
     return { score: 70, matched: [] };
   }
 
-  const text = `${job.title} ${job.description} ${job.matchingSkills.join(' ')}`.toLowerCase();
-  const matched: string[] = [];
+  const titleLower = job.title.toLowerCase();
+  const fullText = `${job.title} ${job.description} ${(job.matchingSkills || []).join(' ')}`.toLowerCase();
 
-  for (const skill of profile.skills) {
-    const sLower = skill.toLowerCase();
-    if (sLower.length >= 2 && text.includes(sLower)) {
-      matched.push(skill);
+  // 1. Target Role & Title Alignment (Up to 45 points)
+  let roleScore = 0;
+  const targetRoles = profile.targetRoles && profile.targetRoles.length > 0
+    ? profile.targetRoles
+    : ['Software Engineer'];
+
+  for (const tr of targetRoles) {
+    const trLower = tr.toLowerCase().trim();
+    if (titleLower.includes(trLower)) {
+      roleScore = Math.max(roleScore, 45);
+    } else {
+      const words = trLower.split(/\s+/).filter((w) => w.length > 3);
+      if (words.length > 0 && words.every((w) => titleLower.includes(w))) {
+        roleScore = Math.max(roleScore, 40);
+      } else if (words.some((w) => titleLower.includes(w))) {
+        roleScore = Math.max(roleScore, 25);
+      }
     }
   }
 
-  const skillRatio = Math.min(matched.length / 5, 1);
-  const score = Math.min(Math.round(60 + skillRatio * 35), 98);
+  // Base role score if title clearly matches core software engineering terms
+  if (roleScore === 0) {
+    if (
+      titleLower.includes('software') ||
+      titleLower.includes('developer') ||
+      titleLower.includes('full stack') ||
+      titleLower.includes('fullstack') ||
+      titleLower.includes('backend') ||
+      titleLower.includes('frontend')
+    ) {
+      roleScore = 30;
+    } else if (SOFTWARE_TITLE_KEYWORDS.some((kw) => titleLower.includes(kw))) {
+      roleScore = 20;
+    }
+  }
 
-  return { score, matched: matched.slice(0, 6) };
+  // 2. Exact Word-Boundary Skill Matching (Up to 45 points)
+  const matchedSkills: string[] = [];
+  const candidateSkills = profile.skills || [];
+  for (const skill of candidateSkills) {
+    const cleanSkill = skill.trim();
+    if (cleanSkill.length < 2) continue;
+    const escaped = cleanSkill.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(`(?:^|[^a-zA-Z0-9_])${escaped}(?:$|[^a-zA-Z0-9_])`, 'i');
+    if (regex.test(fullText)) {
+      matchedSkills.push(cleanSkill);
+    }
+  }
+
+  // 3. Core Tech Stack Priority Bonus (Up to 16 points)
+  const techStack = profile.techStack || [];
+  let stackMatches = 0;
+  for (const stack of techStack) {
+    const escaped = stack.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(`(?:^|[^a-zA-Z0-9_])${escaped}(?:$|[^a-zA-Z0-9_])`, 'i');
+    if (regex.test(fullText)) {
+      stackMatches++;
+    }
+  }
+
+  const skillScore = Math.min(matchedSkills.length * 8 + stackMatches * 8, 45);
+
+  // 4. Experience alignment (+10 points)
+  let expBonus = 0;
+  if (profile.experienceLevel && job.experienceRange) {
+    const exp = job.experienceRange.toLowerCase();
+    if (profile.experienceLevel === 'entry' && (exp.includes('0-2') || exp.includes('0-1') || exp.includes('entry'))) expBonus = 10;
+    else if (profile.experienceLevel === 'mid' && (exp.includes('2-5') || exp.includes('1-4') || exp.includes('mid'))) expBonus = 10;
+    else if (profile.experienceLevel === 'senior' && (exp.includes('4-8') || exp.includes('5+') || exp.includes('senior'))) expBonus = 10;
+    else if (profile.experienceLevel === 'lead' && (exp.includes('8+') || exp.includes('lead') || exp.includes('staff'))) expBonus = 10;
+  }
+
+  const totalScore = Math.min(Math.round(roleScore + skillScore + expBonus), 98);
+
+  return {
+    score: totalScore,
+    matched: matchedSkills.slice(0, 6),
+  };
 }
 
 /**
@@ -1767,6 +2144,11 @@ export async function discoverWorldwideJobs(
   // 1e. Direct ATS Company Career Portals (Lever, Greenhouse, Ashby)
   if (!filters.recruiterFormsOnly && (!filters.source || filters.source === 'all' || filters.source === 'portal')) {
     fetchers.push(searchCompanyCareerPortals(effectiveKeywords, effectiveLocation));
+  }
+
+  // 1f. Instahyre Live Jobs (Tech & Startup Opportunities in India & Remote)
+  if (!filters.recruiterFormsOnly && (!filters.source || filters.source === 'all' || filters.source === 'instahyre')) {
+    fetchers.push(searchInstahyreJobs(effectiveKeywords, effectiveLocation, filters.company));
   }
 
   // 2. Arbeitnow (multi-page, supports explicit visa sponsorship)
@@ -1836,6 +2218,8 @@ export async function discoverWorldwideJobs(
     );
   } else if (filters.source === 'unstop') {
     allJobs = allJobs.filter((job) => job.source === 'unstop');
+  } else if (filters.source === 'instahyre') {
+    allJobs = allJobs.filter((job) => job.source === 'instahyre');
   } else if (filters.source === 'portal') {
     allJobs = allJobs.filter((job) => job.source === 'portal');
   }
@@ -1856,7 +2240,10 @@ export async function discoverWorldwideJobs(
     }
   }
 
-  // Score jobs against user profile
+  // Filter out-of-scope non-software roles across all sources
+  allJobs = allJobs.filter((job) => isJobDomainRelevant(job.title, profile?.field));
+
+  // Score jobs against user profile with accurate word boundaries & role alignment
   allJobs = allJobs.map((job) => {
     const { score, matched } = scoreJobAlignment(job, profile);
     return {
@@ -1865,6 +2252,11 @@ export async function discoverWorldwideJobs(
       matchingSkills: matched.length > 0 ? matched : job.matchingSkills,
     };
   });
+
+  // Relevance threshold: filter out low-relevance or completely non-aligned jobs
+  if (profile && profile.skills && profile.skills.length > 0) {
+    allJobs = allJobs.filter((job) => job.matchScore >= 45);
+  }
 
   // Filter by Experience Level if specified
   if (filters.experienceLevel && filters.experienceLevel !== 'all') {

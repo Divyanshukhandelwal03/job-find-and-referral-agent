@@ -521,6 +521,7 @@ function renderDiscoveredJobs(jobs) {
     linkedin_company: '🏢 LinkedIn Official Company',
     google_form: '📝 Recruiter Post (Google Form)',
     unstop: '🎓 Unstop Jobs',
+    instahyre: '⚡ Instahyre',
     portal: '🏢 Career Portal',
     arbeitnow: '🌍 Arbeitnow (Visa)',
     himalayas: '🏔️ Himalayas',
@@ -602,8 +603,11 @@ function renderDiscoveredJobs(jobs) {
         </div>
 
         <div class="radar-card-actions">
-          <button class="btn btn-sm btn-primary flex-1" onclick="handleImportDiscoveredJob('${job.id}')">
-            ➕ Add to Pipeline & Find Contacts
+          <button class="btn btn-sm btn-agent flex-1" id="btn-agent-${job.id}" onclick="handleRunJobAgent('${job.id}')" title="Autonomous Agent: Auto-discovers decision makers, personalizes pitches using your resume & JD, and dispatches referral emails via Gmail">
+            ⚡ Run Job Agent
+          </button>
+          <button class="btn btn-sm btn-primary flex-1" onclick="handleImportDiscoveredJob('${job.id}')" title="Manual: Add to pipeline and review contacts yourself">
+            ➕ Add to Pipeline
           </button>
           ${formActionButton}
           ${
@@ -625,6 +629,90 @@ function renderDiscoveredJobs(jobs) {
     `;
   }).join('');
 }
+
+async function handleRunJobAgent(jobId) {
+  const job = state.discoveredJobs.find((j) => j.id === jobId);
+  if (!job) return;
+
+  const btn = document.getElementById(`btn-agent-${jobId}`);
+  const originalHtml = btn ? btn.innerHTML : '⚡ Run Job Agent';
+  if (btn) {
+    btn.disabled = true;
+    btn.style.opacity = '0.8';
+    btn.innerHTML = `<span class="spinner-sm" style="display: inline-block; width: 12px; height: 12px; border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff; border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle; margin-right: 4px;"></span> 🤖 Running...`;
+  }
+
+  try {
+    showToast(`🤖 Job Agent started for "${job.company}" — analyzing fit & finding insiders...`, 'info');
+
+    const res = await fetch('/api/jobs/run-agent', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: job.title,
+        company: job.company,
+        location: job.location,
+        url: job.url,
+        description: job.description,
+        source: job.source,
+        visaSponsorship: job.visaSponsorship,
+        remote: job.remote,
+        postedTime: job.postedTime,
+        experienceRange: job.experienceRange,
+        googleFormUrl: job.googleFormUrl,
+        googleFormStatus: job.googleFormStatus,
+        googleFormStatusReason: job.googleFormStatusReason,
+        companyId: job.companyId,
+        recruiterName: job.recruiterName,
+      }),
+    });
+
+    const data = await res.json();
+    if (data.success) {
+      // Immediately remove from discovered jobs in Radar view
+      state.discoveredJobs = state.discoveredJobs.filter((j) => j.id !== jobId);
+      renderDiscoveredJobs(state.discoveredJobs);
+
+      // Refresh pipeline, stats, and outreach records
+      await loadJobs();
+      await loadStats();
+      await loadOutreachHistory();
+
+      if (data.emailsSent > 0) {
+        showToast(
+          `🚀 Agent Success: Reached out to ${data.emailsSent} insiders at "${job.company}" via Gmail with your resume attached!`,
+          'success'
+        );
+      } else if (!data.hasGmail) {
+        showToast(
+          `🎯 Discovered ${data.contactsCount} insiders at "${job.company}"! (Connect Gmail in Settings to enable automated sending). Saved to Pipeline.`,
+          'info'
+        );
+      } else {
+        showToast(
+          `🎯 Discovered ${data.contactsCount} LinkedIn decision makers at "${job.company}". Saved to Pipeline for referral outreach!`,
+          'success'
+        );
+      }
+    } else {
+      showToast(data.error || 'Job agent execution failed', 'error');
+      if (btn) {
+        btn.disabled = false;
+        btn.style.opacity = '1';
+        btn.innerHTML = originalHtml;
+      }
+    }
+  } catch (err) {
+    console.error('Run job agent error:', err);
+    showToast('Network error running job agent', 'error');
+    if (btn) {
+      btn.disabled = false;
+      btn.style.opacity = '1';
+      btn.innerHTML = originalHtml;
+    }
+  }
+}
+window.handleRunJobAgent = handleRunJobAgent;
 
 async function handleImportDiscoveredJob(jobId) {
   const job = state.discoveredJobs.find((j) => j.id === jobId);

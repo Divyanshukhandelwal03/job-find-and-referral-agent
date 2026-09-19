@@ -283,6 +283,20 @@ body {
   box-shadow: 0 6px 20px rgba(16, 185, 129, 0.5);
 }
 
+.btn-agent {
+  background: linear-gradient(135deg, #ec4899, #8b5cf6);
+  color: #ffffff;
+  font-weight: 600;
+  box-shadow: 0 4px 14px rgba(236, 72, 153, 0.35);
+  border: none;
+  transition: all 0.2s ease;
+}
+
+.btn-agent:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(236, 72, 153, 0.55);
+}
+
 .btn-sm {
   padding: 6px 12px;
   font-size: 12px;
