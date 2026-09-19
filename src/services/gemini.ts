@@ -19,7 +19,7 @@ const CANDIDATE_MODELS = [
   'gemini-flash-lite-latest',
 ];
 
-async function generateContentWithFallback(prompt: string, responseJson = false): Promise<string> {
+export async function generateContentWithFallback(prompt: string, responseJson = false): Promise<string> {
   const ai = getAiClient();
   let lastError: any = null;
 
@@ -163,7 +163,7 @@ export async function generateReferralPitch(params: {
   job: JobListing;
   contact: ReferralContact;
   profile: UserProfile;
-  pitchType: 'peer_referral' | 'hiring_manager' | 'linkedin_note';
+  pitchType: 'peer_referral' | 'hiring_manager' | 'recruiter' | 'linkedin_note';
   customInstructions?: string;
 }): Promise<{
   subject: string;
@@ -215,13 +215,20 @@ CRITICAL RULES:
    - No fluff or long pleasantries.
    - Soft ask: "Are you open to a brief 10-minute chat this week to discuss how I can help the team?"
 
-5. IF 'linkedin_note':
+5. IF 'recruiter':
+   - Direct, compelling candidate pitch sent directly to the corporate recruiter/talent acquisition specialist for this role.
+   - Mention that you noticed the active opening for "${job.title}" at "${job.company}" and are reaching out directly because your technical profile is an exceptional fit.
+   - Mention 2-3 specific technical proficiencies/achievements matching the requirements.
+   - Emphasize that your resume is attached for their review.
+   - Clear, professional call to action: "Would you have 10 minutes this week for a brief conversation, or could you connect me with the hiring team for this role?"
+
+6. IF 'linkedin_note':
    - STRICT LIMIT: Must be under 280 characters so it fits in a LinkedIn connection request note.
    - Subject should be empty string or 'LinkedIn Note'.
 
 Return strictly a valid JSON object matching:
 {
-  "subject": "Referral Request: [Role] (Ref ${jobRefCode}) - [Candidate Name]",
+  "subject": "Application / Inquiry: [Role] (Ref ${jobRefCode}) - [Candidate Name]",
   "body": "The complete message body ready to send. Cite the Job Ref: ${jobRefCode}${jobPostUrl ? ` and link ${jobPostUrl}` : ''}. Use line breaks with \\n\\n.",
   "followUpSuggestion": "A brief 2-sentence polite follow-up nudge to send if they don't reply in 3 days."
 }

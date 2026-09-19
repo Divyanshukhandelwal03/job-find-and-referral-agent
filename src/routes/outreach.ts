@@ -47,7 +47,13 @@ router.post('/generate', async (req: Request, res: Response) => {
       job,
       contact,
       profile,
-      pitchType: pitchType || 'peer_referral',
+      pitchType:
+        pitchType ||
+        (contact.contactType === 'recruiter'
+          ? 'recruiter'
+          : contact.contactType === 'manager'
+          ? 'hiring_manager'
+          : 'peer_referral'),
       customInstructions,
     });
 
@@ -359,7 +365,13 @@ router.post('/batch-send', async (req: Request, res: Response) => {
           job,
           contact,
           profile,
-          pitchType: pitchType || (contact.contactType === 'manager' ? 'hiring_manager' : 'peer_referral'),
+          pitchType:
+            pitchType ||
+            (contact.contactType === 'recruiter'
+              ? 'recruiter'
+              : contact.contactType === 'manager'
+              ? 'hiring_manager'
+              : 'peer_referral'),
           customInstructions,
         });
 

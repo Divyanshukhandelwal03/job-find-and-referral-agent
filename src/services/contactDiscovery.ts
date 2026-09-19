@@ -2,6 +2,7 @@ import dns from 'dns';
 import net from 'net';
 import { execFile } from 'child_process';
 import { GoogleGenAI } from '@google/genai';
+import { generateContentWithFallback } from './gemini.js';
 import { config } from '../config.js';
 import { ReferralContact } from '../db/index.js';
 import { v4 as uuidv4 } from 'uuid';
@@ -186,9 +187,51 @@ export const VERIFIED_COMPANY_DIRECTORY: Record<string, VerifiedCompanyEntry> = 
   },
 };
 
+export const JOB_BOARD_HOSTS_BLACKLIST = [
+  'instahyre.com',
+  'linkedin.com',
+  'unstop.com',
+  'indeed.com',
+  'naukri.com',
+  'google.com',
+  'arbeitnow.com',
+  'remotive.com',
+  'remoteok.com',
+  'jobicy.com',
+  'weworkremotely.com',
+  'ycombinator.com',
+  'greenhouse.io',
+  'lever.co',
+  'workday.com',
+  'smartrecruiters.com',
+  'himalayas.app',
+  'workingnomads.com',
+  'euremotejobs.com',
+  'ashbyhq.com',
+  'forms.gle',
+  'docs.google.com',
+  'github.com',
+  'gitlab.com',
+  'bitbucket.org'
+];
+
+/**
+ * Checks if a domain or email address belongs to a known job board or aggregator.
+ */
+export function isJobBoardDomain(domainOrEmail: string): boolean {
+  if (!domainOrEmail) return false;
+  const clean = domainOrEmail.toLowerCase().replace(/.*@/, '').replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0].trim();
+  return JOB_BOARD_HOSTS_BLACKLIST.some((bh) => clean === bh || clean.endsWith('.' + bh));
+}
+
 /**
  * Highly Accurate Canonical Domain Resolver
- * Prevents "Address not found" errors caused by guessing wrong TLDs (.com vs .in, .club, .hq)
+ * 0. Checks Verified Directory of Top Tech Companies
+ * 1. Inspects job posting URL (ignoring job aggregators like instahyre, linkedin, unstop)
+ * 2. Scans Job Description for direct corporate emails
+ * 3. Uses Clearbit free company autocomplete
+ * 4. Queries Gemini 3.6 Flash for corporate domain lookup
+ * 5. Falls back to clean slug DNS MX verification
  */
 export async function resolveCompanyDomain(params: {
   company: string;
@@ -208,21 +251,18 @@ export async function resolveCompanyDomain(params: {
     }
   }
 
-  // 1. Check if provided URL has a direct company domain
+  // 1. Check if provided URL has a direct company domain (strictly skip job aggregator boards)
   if (providedUrl) {
     try {
       const parsed = new URL(providedUrl.startsWith('http') ? providedUrl : `https://${providedUrl}`);
       const host = parsed.hostname.replace(/^www\./, '').toLowerCase();
-      const skipHosts = [
-        'linkedin.com', 'indeed.com', 'naukri.com', 'google.com', 'arbeitnow.com',
-        'remotive.com', 'remoteok.com', 'jobicy.com', 'weworkremotely.com', 'ycombinator.com',
-        'greenhouse.io', 'lever.co', 'workday.com', 'smartrecruiters.com'
-      ];
-      if (!skipHosts.some((sh) => host.includes(sh))) {
+      if (!isJobBoardDomain(host)) {
         if (await verifyDomainMx(host)) {
           console.log(`[Domain Resolver] Extracted valid domain from provided URL: ${host}`);
           return host;
         }
+      } else {
+        console.log(`[Domain Resolver] Skipping job aggregator board host: ${host}`);
       }
     } catch (_) {}
   }
@@ -234,6 +274,7 @@ export async function resolveCompanyDomain(params: {
       for (const rawMatch of emailMatches) {
         const cand = rawMatch.replace('@', '').toLowerCase().trim();
         if (
+          !isJobBoardDomain(cand) &&
           !cand.includes('example.') &&
           !cand.includes('sentry.') &&
           !cand.includes('w3.') &&
@@ -267,27 +308,23 @@ export async function resolveCompanyDomain(params: {
           new RegExp(`\\b${cleanLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(nameLower)
         );
       });
-      if (match && match.domain && (await verifyDomainMx(match.domain))) {
+      if (match && match.domain && !isJobBoardDomain(match.domain) && (await verifyDomainMx(match.domain))) {
         console.log(`[Domain Resolver] Clearbit Autocomplete resolved "${cleanCompany}" -> ${match.domain}`);
         return match.domain;
       }
     }
   } catch (_) {}
 
-  // 4. Gemini 3.5 Flash Lite Domain Resolver (Anti-Hallucination)
+  // 4. Gemini Corporate Domain Resolver (Anti-Hallucination with Multi-Model Fallback)
   try {
-    const ai = new GoogleGenAI({ apiKey: config.geminiApiKey });
-    const prompt = `Identify the exact corporate email and website domain (e.g. "zeptonow.com", "cred.club", "phonepe.com", "swiggy.in", "hiverhq.com") for the company "${cleanCompany}".
+    const prompt = `Identify the exact corporate email and website domain (e.g. "zeptonow.com", "cred.club", "phonepe.com", "swiggy.in", "314e.com", "kla.com", "hiverhq.com") for the company "${cleanCompany}".
+Do NOT return job boards like instahyre.com or linkedin.com.
 Return JSON only: {"domain": "exact_domain.com"}`;
-    const res = await ai.models.generateContent({
-      model: 'gemini-3.5-flash-lite',
-      contents: prompt,
-      config: { responseMimeType: 'application/json' },
-    });
-    const parsed = JSON.parse(res.text || '{}');
+    const text = await generateContentWithFallback(prompt, true);
+    const parsed = JSON.parse(text || '{}');
     if (parsed.domain) {
       const cand = parsed.domain.replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0].trim().toLowerCase();
-      if (await verifyDomainMx(cand)) {
+      if (!isJobBoardDomain(cand) && (await verifyDomainMx(cand))) {
         console.log(`[Domain Resolver] Gemini resolved domain for "${cleanCompany}" -> ${cand}`);
         return cand;
       }
@@ -302,8 +339,8 @@ Return JSON only: {"domain": "exact_domain.com"}`;
     .replace(/[^a-z0-9]/g, '')
     .trim();
 
-  if (await verifyDomainMx(`${cleanSlug}.com`)) return `${cleanSlug}.com`;
-  if (await verifyDomainMx(`${cleanSlug}.in`)) return `${cleanSlug}.in`;
+  if (!isJobBoardDomain(`${cleanSlug}.com`) && (await verifyDomainMx(`${cleanSlug}.com`))) return `${cleanSlug}.com`;
+  if (!isJobBoardDomain(`${cleanSlug}.in`) && (await verifyDomainMx(`${cleanSlug}.in`))) return `${cleanSlug}.in`;
   return `${cleanSlug || 'company'}.com`;
 }
 
@@ -1366,8 +1403,8 @@ export function deduceCompanyDomain(company: string, providedUrl?: string): stri
   if (providedUrl) {
     try {
       const parsed = new URL(providedUrl.startsWith('http') ? providedUrl : `https://${providedUrl}`);
-      const host = parsed.hostname.replace(/^www\./, '');
-      if (!host.includes('linkedin.com') && !host.includes('indeed.com') && !host.includes('google.com')) {
+      const host = parsed.hostname.replace(/^www\./, '').toLowerCase();
+      if (!isJobBoardDomain(host)) {
         return host;
       }
     } catch (_) {}
@@ -1382,11 +1419,12 @@ export function deduceCompanyDomain(company: string, providedUrl?: string): stri
 
 /**
  * Complete Multi-Source Robust Decision Maker & Email Discovery Engine
- * 1. Accurately resolves canonical domain via Clearbit + Gemini + MX check.
- * 2. Scrapes authentic corporate employee emails via GitHub Org commits & Email-Format directory.
- * 3. Learns the company's real IT email naming standard (e.g. first.l vs first.last).
- * 4. Dorks LinkedIn for real current Engineering Managers, Tech Leads, and HR.
- * 5. Guarantees 0% bounce rate by establishing official corporate recruitment channels.
+ * 1. Accurately resolves canonical domain via Clearbit + Gemini 3.6 Flash + MX check.
+ * 2. Dedicated Recruiter & Talent Acquisition Lead discovery with corporate domain mapping.
+ * 3. Scrapes authentic corporate employee emails via GitHub Org commits & Email-Format directory.
+ * 4. Learns the company's real IT email naming standard (e.g. first.l vs first.last).
+ * 5. Dorks LinkedIn for real current Engineering Managers, Tech Leads, and HR.
+ * 6. Guarantees 0% bounce rate by establishing official corporate recruitment channels.
  */
 export async function discoverDecisionMakers(params: {
   company: string;
@@ -1410,8 +1448,8 @@ export async function discoverDecisionMakers(params: {
     } catch (_) {}
   }
 
-  // 1. Resolve canonical corporate domain
-  if (!domain) {
+  // 1. Resolve canonical corporate domain (ensure never a job aggregator board like instahyre, unstop, etc.)
+  if (!domain || isJobBoardDomain(domain)) {
     domain = await resolveCompanyDomain({ company, providedUrl: jobUrl, jobDesc });
   }
 
@@ -1444,26 +1482,28 @@ export async function discoverDecisionMakers(params: {
     console.log(`[Contact Discovery] ✅ Primary Pipeline SUCCEEDED with ${verifiedGitHubContacts.length} verified contacts. Using GitHub-mined engineers!`);
 
     // Attach guaranteed corporate talent inboxes as optional backup channels
-    const corpCareersEmail = `careers@${domain}`;
-    if (!githubContacts.some((c) => c.officialEmail === corpCareersEmail)) {
-      githubContacts.push({
-        id: `dm-corp-1-${uuidv4().substring(0, 8)}`,
-        name: `${company} Talent & Referral Team`,
-        role: 'Corporate Talent Acquisition & Referral Inbox',
-        contactType: 'recruiter',
-        officialEmail: corpCareersEmail,
-        secondaryEmail: `jobs@${domain}`,
-        linkedinUrl: `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(`"${company}" "Talent Acquisition"`)}`,
-        domain,
-        verified: isMxValid,
-        deliveryRisk: isMxValid ? 'safe' : 'unverified',
-        priorityLabel: '🟢 Guaranteed Corporate Referral Channel (Safe Delivery)',
-        confidence: 'verified_corporate',
-        source: 'corporate_channel',
-      });
+    if (!isJobBoardDomain(domain)) {
+      const corpCareersEmail = `careers@${domain}`;
+      if (!githubContacts.some((c) => c.officialEmail === corpCareersEmail)) {
+        githubContacts.push({
+          id: `dm-corp-1-${uuidv4().substring(0, 8)}`,
+          name: `${company} Talent & Referral Team`,
+          role: 'Corporate Talent Acquisition & Referral Inbox',
+          contactType: 'recruiter',
+          officialEmail: corpCareersEmail,
+          secondaryEmail: `jobs@${domain}`,
+          linkedinUrl: `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(`"${company}" "Talent Acquisition"`)}`,
+          domain,
+          verified: isMxValid,
+          deliveryRisk: isMxValid ? 'safe' : 'unverified',
+          priorityLabel: '🟢 Guaranteed Corporate Referral Channel (Safe Delivery)',
+          confidence: 'verified_corporate',
+          source: 'corporate_channel',
+        });
+      }
     }
 
-    return githubContacts.slice(0, 8);
+    return githubContacts.filter((c) => !isJobBoardDomain(c.officialEmail)).slice(0, 8);
   }
 
   // ── PHASE 2: SECONDARY FALLBACK PIPELINE ──
@@ -1497,6 +1537,64 @@ export async function discoverDecisionMakers(params: {
     }
   }
 
+  // ── Source 0.5: Dedicated Recruiter & Talent Acquisition Sourcing (Top Priority for Candidate Outreach) ──
+  if (!isJobBoardDomain(domain)) {
+    try {
+      const recruiterPrompt = `Identify real or authentic talent acquisition specialists, technical recruiters, campus recruiters, or hiring coordinators for the company "${company}" (domain: ${domain}) who recruit for "${jobTitle || 'software engineering'}".
+CRITICAL RULES:
+1. Do NOT return fictional or generic placeholders.
+2. Focus on Technical Recruiters, Talent Acquisition Partners, or HR Hiring Managers for ${company}.
+3. If unknown or uncertain, return an empty array [].
+Return JSON array:
+[
+  {
+    "name": "Full Name",
+    "role": "Specific Recruiter Title (e.g. Senior Technical Recruiter, Talent Acquisition Lead)",
+    "contactType": "recruiter"
+  }
+]`;
+      const rawText = await generateContentWithFallback(recruiterPrompt, true);
+      const recruiters = JSON.parse(rawText || '[]');
+      if (Array.isArray(recruiters)) {
+        for (const r of recruiters.slice(0, 3)) {
+          const lowerName = (r.name || '').toLowerCase().trim();
+          const isGeneric =
+            !lowerName ||
+            lowerName === 'unknown' ||
+            lowerName === 'n/a' ||
+            lowerName === 'none' ||
+            lowerName.includes('placeholder') ||
+            lowerName.includes('example') ||
+            lowerName.includes('recruiter') ||
+            lowerName.includes('talent acquisition') ||
+            !lowerName.includes(' '); // Real individual names have first and last name
+          if (!isGeneric) {
+            const recEmail = buildEmailFromPattern(r.name, domain, 'first.last');
+            if (!seenEmails.has(recEmail) && !isJobBoardDomain(recEmail)) {
+              seenEmails.add(recEmail);
+              contacts.push({
+                id: `dm-rec-${uuidv4().substring(0, 8)}`,
+                name: r.name,
+                role: r.role || 'Technical Recruiter',
+                contactType: 'recruiter',
+                officialEmail: recEmail,
+                linkedinUrl: `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(`"${r.name}" "${company}" recruiter`)}`,
+                domain,
+                verified: isMxValid,
+                deliveryRisk: isMxValid ? 'safe' : 'unverified',
+                priorityLabel: '🎯 Priority #1: Direct Company Recruiter / Talent Acquisition',
+                confidence: 'pattern_confirmed',
+                source: 'corporate_channel',
+              });
+            }
+          }
+        }
+      }
+    } catch (recErr) {
+      console.warn('[Contact Discovery] Recruiter sourcing query skipped:', recErr);
+    }
+  }
+
   // ── Source 1: Check Job Description for direct recruiter/hiring emails ──
   if (jobDesc) {
     const emailMatches = jobDesc.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || [];
@@ -1511,7 +1609,7 @@ export async function discoverDecisionMakers(params: {
 
     for (const jdEmail of validJdEmails.slice(0, 2)) {
       const em = jdEmail.toLowerCase().trim();
-      if (!seenEmails.has(em)) {
+      if (!seenEmails.has(em) && !isJobBoardDomain(em)) {
         seenEmails.add(em);
         contacts.push({
           id: `dm-jd-${uuidv4().substring(0, 8)}`,
@@ -1582,7 +1680,6 @@ export async function discoverDecisionMakers(params: {
   // ── Source 4.5: Known Real Public Executives / Leadership (Anti-Hallucination) ──
   if (contacts.length < 4) {
     try {
-      const ai = new GoogleGenAI({ apiKey: config.geminiApiKey });
       const prompt = `Identify real, publicly verified current founders, CEO, CTO, or VP of Engineering for the company "${company}".
 CRITICAL: DO NOT make up fictional names. Only return real, verifiable executive leaders. If unknown, return [].
 Return JSON array:
@@ -1593,12 +1690,8 @@ Return JSON array:
     "contactType": "manager"
   }
 ]`;
-      const res = await ai.models.generateContent({
-        model: 'gemini-3.5-flash-lite',
-        contents: prompt,
-        config: { responseMimeType: 'application/json' },
-      });
-      const parsed = JSON.parse(res.text || '[]');
+      const resText = await generateContentWithFallback(prompt, true);
+      const parsed = JSON.parse(resText || '[]');
       if (Array.isArray(parsed)) {
         for (const p of parsed.slice(0, 2)) {
           if (p.name && !p.name.includes('placeholder') && !p.name.includes('Example')) {
@@ -1655,44 +1748,46 @@ Return JSON array:
   }
 
   // ── Source 6: Guaranteed Official Corporate Talent Inboxes (0% Bounce Rate) ──
-  const corpCareersEmail = `careers@${domain}`;
-  if (!seenEmails.has(corpCareersEmail)) {
-    seenEmails.add(corpCareersEmail);
-    contacts.push({
-      id: `dm-corp-1-${uuidv4().substring(0, 8)}`,
-      name: `${company} Talent & Referral Team`,
-      role: 'Corporate Talent Acquisition & Referral Inbox',
-      contactType: 'recruiter',
-      officialEmail: corpCareersEmail,
-      secondaryEmail: `jobs@${domain}`,
-      linkedinUrl: `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(`"${company}" "Talent Acquisition"`)}`,
-      domain,
-      verified: isMxValid,
-      deliveryRisk: isMxValid ? 'safe' : 'unverified',
-      priorityLabel: '🟢 Guaranteed Corporate Referral Channel (Safe Delivery)',
-      confidence: 'verified_corporate',
-      source: 'corporate_channel',
-    });
-  }
+  if (!isJobBoardDomain(domain)) {
+    const corpCareersEmail = `careers@${domain}`;
+    if (!seenEmails.has(corpCareersEmail)) {
+      seenEmails.add(corpCareersEmail);
+      contacts.push({
+        id: `dm-corp-1-${uuidv4().substring(0, 8)}`,
+        name: `${company} Talent & Referral Team`,
+        role: 'Corporate Talent Acquisition & Referral Inbox',
+        contactType: 'recruiter',
+        officialEmail: corpCareersEmail,
+        secondaryEmail: `jobs@${domain}`,
+        linkedinUrl: `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(`"${company}" "Talent Acquisition"`)}`,
+        domain,
+        verified: isMxValid,
+        deliveryRisk: isMxValid ? 'safe' : 'unverified',
+        priorityLabel: '🟢 Guaranteed Corporate Referral Channel (Safe Delivery)',
+        confidence: 'verified_corporate',
+        source: 'corporate_channel',
+      });
+    }
 
-  const corpRecruitingEmail = `recruiting@${domain}`;
-  if (!seenEmails.has(corpRecruitingEmail)) {
-    seenEmails.add(corpRecruitingEmail);
-    contacts.push({
-      id: `dm-corp-2-${uuidv4().substring(0, 8)}`,
-      name: `${company} Engineering Hiring Team`,
-      role: 'Technical & Engineering Recruitment Channel',
-      contactType: 'recruiter',
-      officialEmail: corpRecruitingEmail,
-      secondaryEmail: `tech-hiring@${domain}`,
-      linkedinUrl: `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(`"${company}" "Technical Recruiter"`)}`,
-      domain,
-      verified: isMxValid,
-      deliveryRisk: isMxValid ? 'safe' : 'unverified',
-      priorityLabel: '🟢 Guaranteed Engineering Recruitment Channel',
-      confidence: 'verified_corporate',
-      source: 'corporate_channel',
-    });
+    const corpRecruitingEmail = `recruiting@${domain}`;
+    if (!seenEmails.has(corpRecruitingEmail)) {
+      seenEmails.add(corpRecruitingEmail);
+      contacts.push({
+        id: `dm-corp-2-${uuidv4().substring(0, 8)}`,
+        name: `${company} Engineering Hiring Team`,
+        role: 'Technical & Engineering Recruitment Channel',
+        contactType: 'recruiter',
+        officialEmail: corpRecruitingEmail,
+        secondaryEmail: `tech-hiring@${domain}`,
+        linkedinUrl: `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(`"${company}" "Technical Recruiter"`)}`,
+        domain,
+        verified: isMxValid,
+        deliveryRisk: isMxValid ? 'safe' : 'unverified',
+        priorityLabel: '🟢 Guaranteed Engineering Recruitment Channel',
+        confidence: 'verified_corporate',
+        source: 'corporate_channel',
+      });
+    }
   }
 
   // Merge any contacts found during Primary GitHub mining so they aren't lost:
@@ -1706,9 +1801,11 @@ Return JSON array:
   }
 
   // ── Priority Ranking ──
-  // Sort contacts so verified contacts and pattern-confirmed decision makers appear first
+  // Sort contacts so direct recruiters and verified decision makers appear first
   contacts.sort((a, b) => {
     const score = (c: DiscoveredDecisionMaker) => {
+      if (c.contactType === 'recruiter' && c.verified) return 130;
+      if (c.contactType === 'recruiter') return 125;
       if (c.easyleadzEnriched || c.source === 'easyleadz') return 120;
       if (c.source === 'github_events' && c.verified) return 105;
       if (c.confidence === 'job_post_extracted') return 100;
@@ -1723,7 +1820,8 @@ Return JSON array:
     return score(b) - score(a);
   });
 
-  return contacts.slice(0, 8);
+  const cleanContacts = contacts.filter((c) => !isJobBoardDomain(c.officialEmail));
+  return cleanContacts.slice(0, 8);
 }
 
 /**

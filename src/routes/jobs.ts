@@ -8,7 +8,7 @@ import {
   validateGoogleFormStatus,
   isJobInTrackedPipeline,
 } from '../services/jobDiscovery.js';
-import { discoverDecisionMakers, toReferralContact } from '../services/contactDiscovery.js';
+import { discoverDecisionMakers, toReferralContact, isJobBoardDomain } from '../services/contactDiscovery.js';
 import { sendReferralEmail } from '../services/email.js';
 
 const router = Router();
@@ -275,19 +275,37 @@ router.post('/run-agent', async (req: Request, res: Response) => {
     followUpDate.setDate(followUpDate.getDate() + followUpDays);
 
     if (hasGmail) {
-      // Find contacts with deliverable emails
+      // Find contacts with deliverable emails (strictly excluding any job board addresses like instahyre, unstop, etc.)
       const deliverableContacts = savedContacts.filter(
-        (c) => c.email && c.email.includes('@') && !c.email.includes('example.com')
+        (c) =>
+          c.email &&
+          c.email.includes('@') &&
+          !c.email.includes('example.com') &&
+          !isJobBoardDomain(c.email)
       );
 
-      // Take up to 3 priority contacts (mix of managers, recruiters, peers)
+      // Sort deliverable contacts so that Recruiters are Priority #1, followed by Managers, followed by Peers
+      deliverableContacts.sort((a, b) => {
+        const typeScore = (t?: string) => {
+          if (t === 'recruiter') return 3;
+          if (t === 'manager') return 2;
+          return 1;
+        };
+        return typeScore(b.contactType) - typeScore(a.contactType);
+      });
+
+      // Take up to 3 priority contacts (prioritizing direct recruiters first)
       const targetContacts = deliverableContacts.slice(0, 3);
 
       for (let i = 0; i < targetContacts.length; i++) {
         const contact = targetContacts[i];
         try {
           const pitchType =
-            contact.contactType === 'manager' ? 'hiring_manager' : 'peer_referral';
+            contact.contactType === 'recruiter'
+              ? 'recruiter'
+              : contact.contactType === 'manager'
+              ? 'hiring_manager'
+              : 'peer_referral';
 
           console.log(`[Job Agent] [${i + 1}/${targetContacts.length}] Generating pitch for ${contact.name} (${contact.role})...`);
           const pitch = await generateReferralPitch({

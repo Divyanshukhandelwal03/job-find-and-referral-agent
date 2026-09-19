@@ -88,7 +88,7 @@ export interface OutreachRecord {
   channel: 'email' | 'linkedin';
   subject: string;
   body: string;
-  pitchType: 'peer_referral' | 'hiring_manager' | 'linkedin_note';
+  pitchType: 'peer_referral' | 'hiring_manager' | 'recruiter' | 'linkedin_note';
   status: 'draft' | 'sent' | 'failed' | 'replied';
   recipientEmail?: string;
   recipientName?: string;
