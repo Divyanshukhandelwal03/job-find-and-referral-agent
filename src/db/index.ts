@@ -40,7 +40,7 @@ export interface JobListing {
   location?: string;
   url?: string;
   description: string;
-  status: 'saved' | 'analyzed' | 'contact_found' | 'outreach_sent' | 'followup_sent' | 'replied' | 'interview' | 'rejected';
+  status: 'saved' | 'analyzed' | 'contact_found' | 'outreach_sent' | 'followup_sent' | 'replied' | 'interview' | 'rejected' | 'applied';
   source?: 'linkedin' | 'linkedin_company' | 'unstop' | 'arbeitnow' | 'remotive' | 'remoteok' | 'jobicy' | 'weworkremotely' | 'hn_hiring' | 'himalayas' | 'workingnomads' | 'euremotejobs' | 'google_form' | 'portal' | 'manual';
   visaSponsorship?: boolean;
   remote?: boolean;

@@ -33,5 +33,6 @@ Thumbs.db
 
 # Temporary files
 test_ddg.cjs
+scratch/
 *.tmp
 *.bak

@@ -342,6 +342,88 @@ async function scanWorldwideJobsForProfile() {
   await searchWorldwideJobs();
 }
 
+function normalizeJobUrlClient(rawUrl) {
+  if (!rawUrl) return '';
+  try {
+    let trimmed = rawUrl.trim();
+    if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
+      trimmed = `https://${trimmed}`;
+    }
+    const u = new URL(trimmed);
+
+    const linkedinMatch = u.pathname.match(/\/jobs\/view\/(?:.*-)?(\d+)/i);
+    if (linkedinMatch) {
+      return `linkedin:job:${linkedinMatch[1]}`;
+    }
+
+    if (u.hostname.includes('forms.gle')) {
+      return `gform:${u.pathname.replace(/^\//, '').toLowerCase()}`;
+    }
+    const gFormDocMatch = u.pathname.match(/\/forms\/d\/e\/([a-zA-Z0-9_-]+)/i);
+    if (gFormDocMatch) {
+      return `gform:${gFormDocMatch[1]}`;
+    }
+
+    const hostname = u.hostname.replace(/^www\./i, '').toLowerCase();
+    const pathname = u.pathname.replace(/\/+$/, '').toLowerCase();
+    return `${hostname}${pathname}`;
+  } catch {
+    return rawUrl.trim().toLowerCase().replace(/\/+$/, '');
+  }
+}
+
+function normalizeJobTextClient(text) {
+  if (!text) return '';
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isJobInTrackedPipelineClient(discovered, trackedJobs) {
+  if (!trackedJobs || trackedJobs.length === 0) return false;
+
+  const dNormUrl = normalizeJobUrlClient(discovered.url);
+  const dNormApplyUrl = normalizeJobUrlClient(discovered.applyUrl);
+  const dNormFormUrl = normalizeJobUrlClient(discovered.googleFormUrl);
+  const dNormCompany = normalizeJobTextClient(discovered.company);
+  const dNormTitle = normalizeJobTextClient(discovered.title);
+
+  return trackedJobs.some((tracked) => {
+    const tNormUrl = normalizeJobUrlClient(tracked.url);
+    const tNormApplyUrl = normalizeJobUrlClient(tracked.applyUrl);
+    const tNormFormUrl = normalizeJobUrlClient(tracked.googleFormUrl);
+    const tNormCompany = normalizeJobTextClient(tracked.company);
+    const tNormTitle = normalizeJobTextClient(tracked.title);
+
+    // 1. Direct URL match across url and applyUrl
+    if (dNormUrl && tNormUrl && dNormUrl === tNormUrl) return true;
+    if (dNormApplyUrl && tNormApplyUrl && dNormApplyUrl === tNormApplyUrl) return true;
+    if (dNormUrl && tNormApplyUrl && dNormUrl === tNormApplyUrl) return true;
+    if (dNormApplyUrl && tNormUrl && dNormApplyUrl === tNormUrl) return true;
+
+    // 2. Google Form URL match
+    if (dNormFormUrl && tNormFormUrl && dNormFormUrl === tNormFormUrl) return true;
+    if (dNormFormUrl && tNormUrl && dNormFormUrl === tNormUrl) return true;
+    if (dNormUrl && tNormFormUrl && dNormUrl === tNormFormUrl) return true;
+
+    // 3. Exact Company + Title match
+    if (dNormCompany && tNormCompany && dNormTitle && tNormTitle) {
+      const companyMatches =
+        dNormCompany === tNormCompany ||
+        (dNormCompany.length >= 4 && tNormCompany.includes(dNormCompany)) ||
+        (tNormCompany.length >= 4 && dNormCompany.includes(tNormCompany));
+
+      if (companyMatches && dNormTitle === tNormTitle) {
+        return true;
+      }
+    }
+
+    return false;
+  });
+}
+
 async function searchWorldwideJobs() {
   const grid = document.getElementById('radar-jobs-grid');
   const meta = document.getElementById('radar-results-meta');
@@ -398,7 +480,8 @@ async function searchWorldwideJobs() {
     if (data.success) {
       state.discoveredJobs = data.jobs || [];
       if (meta) {
-        meta.textContent = `Found ${state.discoveredJobs.length} live jobs (${company ? `Company: ${company} • ` : ''}${countryCity} • ${source})`;
+        const excludedNotice = data.excludedPipelineCount > 0 ? ` • ${data.excludedPipelineCount} tracked in pipeline hidden` : '';
+        meta.textContent = `Found ${state.discoveredJobs.length} live jobs (${company ? `Company: ${company} • ` : ''}${countryCity} • ${source}${excludedNotice})`;
       }
       renderDiscoveredJobs(state.discoveredJobs);
     } else {
@@ -413,12 +496,20 @@ async function searchWorldwideJobs() {
 
 function renderDiscoveredJobs(jobs) {
   const grid = document.getElementById('radar-jobs-grid');
-  if (!jobs || jobs.length === 0) {
+  // Client-side safeguard: filter out any job that matches the tracked pipeline
+  const displayableJobs = (jobs || []).filter((job) => !isJobInTrackedPipelineClient(job, state.jobs));
+
+  if (!displayableJobs || displayableJobs.length === 0) {
+    const hadTrackedExclusions = (jobs || []).length > 0;
     grid.innerHTML = `
       <div class="empty-state" id="radar-empty-state">
-        <div class="empty-icon">📂</div>
-        <h3>No matching jobs found</h3>
-        <p>Try broadening your keywords or removing the Visa/Remote filters to see more worldwide listings.</p>
+        <div class="empty-icon">${hadTrackedExclusions ? '🎯' : '📂'}</div>
+        <h3>${hadTrackedExclusions ? 'All matching jobs are already in your Pipeline!' : 'No matching jobs found'}</h3>
+        <p>${
+          hadTrackedExclusions
+            ? 'You have already added or reached out to all opportunities found for this scan. Check your <strong>Tracked Pipeline</strong> tab, or broaden your keywords/locations to find fresh roles.'
+            : 'Try broadening your keywords or removing the Visa/Remote filters to see more worldwide listings.'
+        }</p>
         <button class="btn btn-outline mt-3" onclick="scanWorldwideJobsForProfile()">Reset & Auto-Scan Profile</button>
       </div>
     `;
@@ -442,7 +533,7 @@ function renderDiscoveredJobs(jobs) {
     remotive: '🎯 Remotive',
   };
 
-  grid.innerHTML = jobs.map((job) => {
+  grid.innerHTML = displayableJobs.map((job) => {
     const scoreColor = job.matchScore >= 80 ? '#10b981' : job.matchScore >= 65 ? '#fbbf24' : '#94a3b8';
     const sourceIcon = sourceLabels[job.source] || '🏢 Portal';
     const hasForm = Boolean(job.googleFormUrl) || job.source === 'google_form';
@@ -567,6 +658,10 @@ async function handleImportDiscoveredJob(jobId) {
     const data = await res.json();
     if (data.success) {
       showToast(`Imported! Analyzed fit score: ${data.job.matchScore || 80}%`, 'success');
+      // Immediately remove from discovered jobs so it disappears from radar view
+      state.discoveredJobs = state.discoveredJobs.filter((j) => j.id !== jobId);
+      renderDiscoveredJobs(state.discoveredJobs);
+
       await loadJobs();
       await loadStats();
 
@@ -986,6 +1081,10 @@ async function openJobDetailsModal(jobId) {
     state.currentContacts = data.contacts;
 
     document.getElementById('modal-job-title').textContent = data.job.title;
+    const statusSelect = document.getElementById('modal-job-status-select');
+    if (statusSelect) {
+      statusSelect.value = data.job.status || 'saved';
+    }
 
     let metaSubtitle = `${data.job.company} • ${data.job.location || 'Remote'}`;
     if (data.job.companyId) {
@@ -1128,6 +1227,29 @@ async function openJobDetailsModal(jobId) {
 function closeJobDetailsModal() {
   document.getElementById('modal-job-details').classList.add('hidden');
 }
+
+async function handleModalJobStatusChange(newStatus) {
+  if (!state.selectedJob || !state.selectedJob.id) return;
+  try {
+    const res = await fetch(`/api/jobs/${state.selectedJob.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: newStatus }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      state.selectedJob.status = newStatus;
+      showToast(`Job status updated to "${newStatus.replace(/_/g, ' ')}"`, 'success');
+      await loadJobs();
+      await loadStats();
+    } else {
+      showToast(data.error || 'Failed to update status', 'error');
+    }
+  } catch (err) {
+    showToast('Failed to update status', 'error');
+  }
+}
+window.handleModalJobStatusChange = handleModalJobStatusChange;
 
 async function recheckModalFormStatus() {
   if (!state.selectedJob || !state.selectedJob.id) return;

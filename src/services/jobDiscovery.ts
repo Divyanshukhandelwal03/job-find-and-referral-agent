@@ -1901,3 +1901,102 @@ export async function discoverWorldwideJobs(
   // Return up to 250 high-quality matching opportunities
   return deduplicated.slice(0, filters.limit || 250);
 }
+
+/**
+ * Normalizes a job URL to enable exact comparison across tracking parameters,
+ * localized subdomains (e.g. in.linkedin.com vs linkedin.com), and platform IDs.
+ */
+export function normalizeJobUrl(rawUrl?: string): string {
+  if (!rawUrl) return '';
+  try {
+    let trimmed = rawUrl.trim();
+    if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
+      trimmed = `https://${trimmed}`;
+    }
+    const u = new URL(trimmed);
+
+    // Extract LinkedIn numeric job ID if present (e.g., /jobs/view/xyz-4464880093 or /jobs/view/4464880093)
+    const linkedinMatch = u.pathname.match(/\/jobs\/view\/(?:.*-)?(\d+)/i);
+    if (linkedinMatch) {
+      return `linkedin:job:${linkedinMatch[1]}`;
+    }
+
+    // For Google Forms, extract docs.google.com/forms/d/e/... or forms.gle/...
+    if (u.hostname.includes('forms.gle')) {
+      return `gform:${u.pathname.replace(/^\//, '').toLowerCase()}`;
+    }
+    const gFormDocMatch = u.pathname.match(/\/forms\/d\/e\/([a-zA-Z0-9_-]+)/i);
+    if (gFormDocMatch) {
+      return `gform:${gFormDocMatch[1]}`;
+    }
+
+    // Strip common tracking and query parameters (utm_*, refId, trackingId, trackingCode, etc.)
+    const hostname = u.hostname.replace(/^www\./i, '').toLowerCase();
+    const pathname = u.pathname.replace(/\/+$/, '').toLowerCase();
+    return `${hostname}${pathname}`;
+  } catch {
+    return rawUrl.trim().toLowerCase().replace(/\/+$/, '');
+  }
+}
+
+/**
+ * Normalizes company and title strings for clean matching
+ */
+export function normalizeJobText(text?: string): string {
+  if (!text) return '';
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Checks if a discovered job is already present in the candidate's tracked pipeline
+ * or has already been reached out to via Gmail / applied.
+ */
+export function isJobInTrackedPipeline(
+  discovered: { title?: string; company?: string; url?: string; applyUrl?: string; googleFormUrl?: string },
+  trackedJobs: JobListing[]
+): boolean {
+  if (!trackedJobs || trackedJobs.length === 0) return false;
+
+  const dNormUrl = normalizeJobUrl(discovered.url);
+  const dNormApplyUrl = normalizeJobUrl(discovered.applyUrl);
+  const dNormFormUrl = normalizeJobUrl(discovered.googleFormUrl);
+  const dNormCompany = normalizeJobText(discovered.company);
+  const dNormTitle = normalizeJobText(discovered.title);
+
+  return trackedJobs.some((tracked) => {
+    const tNormUrl = normalizeJobUrl(tracked.url);
+    const tNormApplyUrl = normalizeJobUrl(tracked.applyUrl);
+    const tNormFormUrl = normalizeJobUrl(tracked.googleFormUrl);
+    const tNormCompany = normalizeJobText(tracked.company);
+    const tNormTitle = normalizeJobText(tracked.title);
+
+    // 1. Direct URL match across url and applyUrl
+    if (dNormUrl && tNormUrl && dNormUrl === tNormUrl) return true;
+    if (dNormApplyUrl && tNormApplyUrl && dNormApplyUrl === tNormApplyUrl) return true;
+    if (dNormUrl && tNormApplyUrl && dNormUrl === tNormApplyUrl) return true;
+    if (dNormApplyUrl && tNormUrl && dNormApplyUrl === tNormUrl) return true;
+
+    // 2. Google Form URL match
+    if (dNormFormUrl && tNormFormUrl && dNormFormUrl === tNormFormUrl) return true;
+    if (dNormFormUrl && tNormUrl && dNormFormUrl === tNormUrl) return true;
+    if (dNormUrl && tNormFormUrl && dNormUrl === tNormFormUrl) return true;
+
+    // 3. Exact Company + Title match
+    if (dNormCompany && tNormCompany && dNormTitle && tNormTitle) {
+      const companyMatches =
+        dNormCompany === tNormCompany ||
+        (dNormCompany.length >= 4 && tNormCompany.includes(dNormCompany)) ||
+        (tNormCompany.length >= 4 && dNormCompany.includes(tNormCompany));
+
+      if (companyMatches && dNormTitle === tNormTitle) {
+        return true;
+      }
+    }
+
+    return false;
+  });
+}

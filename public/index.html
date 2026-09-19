@@ -238,7 +238,10 @@
             <option value="analyzed">Analyzed</option>
             <option value="contact_found">Contact Found</option>
             <option value="outreach_sent">Outreach Sent</option>
+            <option value="applied">Applied</option>
             <option value="replied">Replied</option>
+            <option value="interview">Interview</option>
+            <option value="rejected">Rejected</option>
           </select>
           <button class="btn btn-outline-danger btn-sm" id="btn-clear-pipeline" title="Clear all tracked jobs, contacts, and outreach from the local database">
             <span>🗑️ Clear Tracked Pipeline</span>
@@ -564,7 +567,22 @@
           <h3 id="modal-job-title">Job Title</h3>
           <span class="text-muted text-sm" id="modal-job-company">Company Name</span>
         </div>
-        <button class="modal-close" onclick="closeJobDetailsModal()">&times;</button>
+        <div class="flex-align gap-2">
+          <div class="flex-align gap-1" style="background: rgba(255,255,255,0.05); padding: 4px 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.1);">
+            <label for="modal-job-status-select" class="text-xs text-muted" style="margin: 0; font-size: 11px;">Status:</label>
+            <select id="modal-job-status-select" class="custom-select" style="font-size: 11px; height: 26px; padding: 1px 6px; background: transparent; border: none; color: #a5b4fc; font-weight: 600;" onchange="handleModalJobStatusChange(this.value)">
+              <option value="saved">Saved</option>
+              <option value="analyzed">Analyzed</option>
+              <option value="contact_found">Contact Found</option>
+              <option value="outreach_sent">Outreach Sent</option>
+              <option value="applied">Applied</option>
+              <option value="replied">Replied</option>
+              <option value="interview">Interview</option>
+              <option value="rejected">Rejected</option>
+            </select>
+          </div>
+          <button class="modal-close" onclick="closeJobDetailsModal()">&times;</button>
+        </div>
       </div>
 
       <div class="modal-body">

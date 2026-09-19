@@ -2,7 +2,12 @@ import { Router, Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { db, JobListing } from '../db/index.js';
 import { analyzeJobMatch } from '../services/gemini.js';
-import { discoverWorldwideJobs, parseDirectJobLink, validateGoogleFormStatus } from '../services/jobDiscovery.js';
+import {
+  discoverWorldwideJobs,
+  parseDirectJobLink,
+  validateGoogleFormStatus,
+  isJobInTrackedPipeline,
+} from '../services/jobDiscovery.js';
 
 const router = Router();
 
@@ -11,11 +16,22 @@ router.post('/discover', async (req: Request, res: Response) => {
   try {
     const profile = db.getProfile();
     const filters = req.body || {};
-    const jobs = await discoverWorldwideJobs(profile, filters);
+    const rawJobs = await discoverWorldwideJobs(profile, filters);
+
+    // Filter out jobs that appear in the tracked pipeline (e.g. reached out via Gmail, applied, or saved)
+    const trackedJobs = db.getJobs();
+    const jobs = rawJobs.filter((discovered) => !isJobInTrackedPipeline(discovered, trackedJobs));
+    const excludedPipelineCount = rawJobs.length - jobs.length;
+
+    if (excludedPipelineCount > 0) {
+      console.log(`[Job Discovery] Excluded ${excludedPipelineCount} jobs already present in tracked pipeline.`);
+    }
+
     res.json({
       success: true,
       count: jobs.length,
       jobs,
+      excludedPipelineCount,
       appliedFilters: filters,
     });
   } catch (err: any) {
