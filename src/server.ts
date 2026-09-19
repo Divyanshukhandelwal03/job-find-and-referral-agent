@@ -8,6 +8,7 @@ import jobsRoutes from './routes/jobs.js';
 import contactsRoutes from './routes/contacts.js';
 import outreachRoutes from './routes/outreach.js';
 import settingsRoutes from './routes/settings.js';
+import { initializeNaukriScheduler } from './services/naukriBooster.js';
 
 const app = express();
 
@@ -54,6 +55,9 @@ app.listen(config.port, () => {
   console.log(`📁 Local Data Storage: ${config.dataDir}`);
   console.log(`🤖 Gemini AI: ${config.geminiApiKey ? 'Connected ✅' : 'Missing API Key ❌'}`);
   console.log('========================================================\n');
+
+  // Start background Naukri daily scheduler if enabled
+  initializeNaukriScheduler();
 });
 
 export default app;

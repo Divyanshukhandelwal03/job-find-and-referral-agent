@@ -119,6 +119,13 @@ export interface AppSettings {
   hunterApiKey?: string;
   easyleadzApiKey?: string;
   githubToken?: string;
+  // Naukri 9:58 AM IST Auto-Booster
+  naukriCookie?: string;
+  naukriBoosterEnabled?: boolean;
+  naukriScheduleTime?: string; // e.g. "09:58"
+  naukriLastBoostedAt?: string;
+  naukriLastBoostStatus?: string;
+  naukriCandidateName?: string;
 }
 
 export interface DatabaseSchema {
@@ -137,6 +144,12 @@ const DEFAULT_SETTINGS: AppSettings = {
   targetLocation: 'Remote / India',
   autoAttachResume: true,
   defaultFollowUpDays: 3,
+  naukriCookie: '',
+  naukriBoosterEnabled: false,
+  naukriScheduleTime: '09:58',
+  naukriLastBoostedAt: '',
+  naukriLastBoostStatus: 'Not started yet',
+  naukriCandidateName: '',
 };
 
 const DEFAULT_DB: DatabaseSchema = {

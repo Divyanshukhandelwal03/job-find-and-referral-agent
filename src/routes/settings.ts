@@ -3,6 +3,7 @@ import fs from 'fs';
 import { db } from '../db/index.js';
 import { config } from '../config.js';
 import { testGmailConnection } from '../services/email.js';
+import { boostNaukriProfile, restartNaukriScheduler } from '../services/naukriBooster.js';
 
 const router = Router();
 
@@ -25,6 +26,15 @@ router.get('/', (_req: Request, res: Response) => {
         ? '••••••••••••••••'
         : '',
       hasEasyleadzKey: Boolean(settings.easyleadzApiKey || config.easyleadzApiKey),
+      naukriCookie: settings.naukriCookie
+        ? '••••••••••••••••'
+        : '',
+      hasNaukriCookie: Boolean(settings.naukriCookie),
+      naukriBoosterEnabled: Boolean(settings.naukriBoosterEnabled),
+      naukriScheduleTime: settings.naukriScheduleTime || '09:58',
+      naukriLastBoostedAt: settings.naukriLastBoostedAt || '',
+      naukriLastBoostStatus: settings.naukriLastBoostStatus || 'Not started yet',
+      naukriCandidateName: settings.naukriCandidateName || '',
     },
     system: {
       geminiKeyConfigured: Boolean(config.geminiApiKey),
@@ -47,6 +57,9 @@ router.post('/', (req: Request, res: Response) => {
     defaultFollowUpDays,
     hunterApiKey,
     easyleadzApiKey,
+    naukriCookie,
+    naukriBoosterEnabled,
+    naukriScheduleTime,
   } = req.body;
 
   let newAppPassword = current.gmailAppPassword;
@@ -76,6 +89,15 @@ router.post('/', (req: Request, res: Response) => {
     }
   }
 
+  let newNaukriCookie = current.naukriCookie;
+  if (naukriCookie !== undefined) {
+    if (naukriCookie === '') {
+      newNaukriCookie = '';
+    } else if (!naukriCookie.includes('•••')) {
+      newNaukriCookie = naukriCookie.trim();
+    }
+  }
+
   const updated = db.saveSettings({
     gmailAddress: gmailAddress !== undefined ? gmailAddress.trim() : current.gmailAddress,
     gmailAppPassword: newAppPassword,
@@ -87,7 +109,19 @@ router.post('/', (req: Request, res: Response) => {
       defaultFollowUpDays !== undefined ? parseInt(defaultFollowUpDays, 10) : current.defaultFollowUpDays,
     hunterApiKey: newHunterKey,
     easyleadzApiKey: newEasyleadzKey,
+    naukriCookie: newNaukriCookie,
+    naukriBoosterEnabled:
+      naukriBoosterEnabled !== undefined ? Boolean(naukriBoosterEnabled) : current.naukriBoosterEnabled,
+    naukriScheduleTime:
+      naukriScheduleTime !== undefined ? String(naukriScheduleTime).trim() : current.naukriScheduleTime,
   });
+
+  // Reconfigure the background cron scheduler if settings changed
+  try {
+    restartNaukriScheduler();
+  } catch (err) {
+    console.error('[Settings] Error restarting Naukri scheduler:', err);
+  }
 
   res.json({
     success: true,
@@ -100,8 +134,71 @@ router.post('/', (req: Request, res: Response) => {
       hasHunterKey: Boolean(updated.hunterApiKey),
       easyleadzApiKey: updated.easyleadzApiKey ? '••••••••••••••••' : '',
       hasEasyleadzKey: Boolean(updated.easyleadzApiKey || config.easyleadzApiKey),
+      naukriCookie: updated.naukriCookie ? '••••••••••••••••' : '',
+      hasNaukriCookie: Boolean(updated.naukriCookie),
+      naukriBoosterEnabled: Boolean(updated.naukriBoosterEnabled),
+      naukriScheduleTime: updated.naukriScheduleTime || '09:58',
+      naukriLastBoostedAt: updated.naukriLastBoostedAt || '',
+      naukriLastBoostStatus: updated.naukriLastBoostStatus || 'Not started yet',
+      naukriCandidateName: updated.naukriCandidateName || '',
     },
   });
+});
+
+// TEST / INSTANT NAUKRI PROFILE BOOST
+router.post('/naukri-boost', async (req: Request, res: Response) => {
+  try {
+    const current = db.getSettings();
+    let cookieToUse = req.body.naukriCookie;
+    if (!cookieToUse || cookieToUse.includes('•••')) {
+      cookieToUse = current.naukriCookie;
+    }
+
+    if (!cookieToUse) {
+      return res.status(400).json({
+        success: false,
+        error: 'Please paste your Naukri session cookie first.',
+      });
+    }
+
+    const result = await boostNaukriProfile(cookieToUse);
+    res.json(result);
+  } catch (err: any) {
+    console.error('Naukri boost test error:', err);
+    res.status(500).json({ success: false, error: err?.message || 'Naukri boost test failed' });
+  }
+});
+
+// DISCONNECT / CLEAR NAUKRI CREDENTIALS
+router.post('/naukri-disconnect', (_req: Request, res: Response) => {
+  try {
+    const current = db.getSettings();
+    const updated = db.saveSettings({
+      ...current,
+      naukriCookie: '',
+      naukriBoosterEnabled: false,
+      naukriLastBoostStatus: 'Booster disabled and cookie disconnected.',
+    });
+
+    try {
+      restartNaukriScheduler();
+    } catch {
+      // Ignored
+    }
+
+    res.json({
+      success: true,
+      message: 'Naukri session cookie removed and booster disabled.',
+      settings: {
+        ...updated,
+        naukriCookie: '',
+        hasNaukriCookie: false,
+        naukriBoosterEnabled: false,
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || 'Failed to disconnect Naukri' });
+  }
 });
 
 // DISCONNECT / UNLINK Gmail credentials completely from local storage

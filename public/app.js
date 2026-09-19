@@ -299,6 +299,37 @@ async function loadSettings() {
         }
       }
 
+      // Naukri 9:58 AM IST Auto-Booster
+      const naukriEnabledEl = document.getElementById('setting-naukri-booster-enabled');
+      const naukriScheduleEl = document.getElementById('setting-naukri-schedule-time');
+      const naukriCookieEl = document.getElementById('setting-naukri-cookie');
+      const naukriBadge = document.getElementById('naukri-status-badge');
+      const naukriStatusEl = document.getElementById('naukri-last-boost-status');
+      const naukriCandidateEl = document.getElementById('naukri-candidate-display');
+
+      if (naukriEnabledEl) naukriEnabledEl.checked = Boolean(data.settings.naukriBoosterEnabled);
+      if (naukriScheduleEl) naukriScheduleEl.value = data.settings.naukriScheduleTime || '09:58';
+      if (naukriCookieEl) naukriCookieEl.value = data.settings.naukriCookie || '';
+
+      if (naukriStatusEl) naukriStatusEl.textContent = data.settings.naukriLastBoostStatus || 'Not started yet';
+      if (naukriCandidateEl) naukriCandidateEl.textContent = data.settings.naukriCandidateName ? `👤 ${data.settings.naukriCandidateName}` : '';
+
+      if (naukriBadge) {
+        if (data.settings.naukriBoosterEnabled && data.settings.hasNaukriCookie) {
+          naukriBadge.textContent = `Scheduled: Daily at ${data.settings.naukriScheduleTime || '09:58'} IST ✅`;
+          naukriBadge.style.background = 'rgba(16,185,129,0.15)';
+          naukriBadge.style.color = '#10b981';
+        } else if (data.settings.hasNaukriCookie) {
+          naukriBadge.textContent = 'Cookie Saved (Schedule Paused)';
+          naukriBadge.style.background = 'rgba(59,130,246,0.15)';
+          naukriBadge.style.color = '#3b82f6';
+        } else {
+          naukriBadge.textContent = 'Disabled';
+          naukriBadge.style.background = 'rgba(245,158,11,0.15)';
+          naukriBadge.style.color = '#f59e0b';
+        }
+      }
+
       document.getElementById('sys-db-path').textContent = data.system.dbPath;
       document.getElementById('sys-uploads-path').textContent = data.system.uploadsDir;
       document.getElementById('sys-port').textContent = data.system.port;
@@ -2473,6 +2504,137 @@ function escapeHtml(str) {
     .replace(/'/g, '&#039;');
 }
 
+// ─── Naukri.com Daily Profile Booster ───────────────────────────────
+function toggleNaukriGuide() {
+  const guide = document.getElementById('naukri-cookie-guide');
+  if (guide) guide.classList.toggle('hidden');
+}
+
+function toggleCookieVisibility() {
+  const input = document.getElementById('setting-naukri-cookie');
+  if (input) {
+    input.type = input.type === 'password' ? 'text' : 'password';
+  }
+}
+
+async function handleSaveNaukriSettings() {
+  const naukriCookie = document.getElementById('setting-naukri-cookie')?.value;
+  const naukriBoosterEnabled = document.getElementById('setting-naukri-booster-enabled')?.checked;
+  const naukriScheduleTime = document.getElementById('setting-naukri-schedule-time')?.value;
+
+  try {
+    const res = await fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        naukriCookie,
+        naukriBoosterEnabled,
+        naukriScheduleTime,
+      }),
+    });
+
+    const data = await res.json();
+    if (data.success) {
+      showToast('Naukri Booster settings saved successfully!', 'success');
+      state.settings = data.settings;
+      await loadSettings();
+    } else {
+      showToast(data.error || 'Failed to save Naukri settings', 'error');
+    }
+  } catch (err) {
+    showToast('Error saving Naukri settings', 'error');
+  }
+}
+
+async function handleTestNaukriBoost() {
+  const cookieInput = document.getElementById('setting-naukri-cookie')?.value;
+  const resultBox = document.getElementById('naukri-boost-result');
+  const btn = document.getElementById('btn-test-naukri-boost');
+
+  if (!cookieInput && (!state.settings || !state.settings.hasNaukriCookie)) {
+    showToast('Please paste your Naukri cookie first', 'warning');
+    return;
+  }
+
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<span>⏳ Boosting Profile...</span>';
+  }
+
+  if (resultBox) {
+    resultBox.classList.remove('hidden');
+    resultBox.className = 'alert alert-info mt-3';
+    resultBox.textContent = 'Connecting to Naukri cloudgateway and refreshing profile timestamp...';
+  }
+
+  try {
+    const res = await fetch('/api/settings/naukri-boost', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ naukriCookie: cookieInput }),
+    });
+
+    const data = await res.json();
+    if (data.success) {
+      if (resultBox) {
+        resultBox.className = 'alert alert-info mt-3';
+        resultBox.style.borderColor = 'var(--accent-emerald)';
+        resultBox.style.color = 'var(--accent-emerald)';
+        resultBox.innerHTML = `✅ <strong>Profile Boosted!</strong> ${data.message} ${data.candidateName ? `<br>👤 Candidate: <strong>${escapeHtml(data.candidateName)}</strong>` : ''}`;
+      }
+      showToast('🎉 Naukri profile timestamp refreshed successfully!', 'success');
+      await loadSettings();
+    } else if (data.status === 'expired') {
+      if (resultBox) {
+        resultBox.className = 'alert alert-info mt-3';
+        resultBox.style.borderColor = 'var(--accent-rose)';
+        resultBox.style.color = 'var(--accent-rose)';
+        resultBox.innerHTML = `⚠️ <strong>Cookie Expired:</strong> ${data.error}`;
+      }
+      showToast('Naukri cookie expired. Please copy a fresh cookie.', 'error');
+    } else {
+      if (resultBox) {
+        resultBox.className = 'alert alert-info mt-3';
+        resultBox.style.borderColor = 'var(--accent-rose)';
+        resultBox.style.color = 'var(--accent-rose)';
+        resultBox.innerHTML = `❌ <strong>Error:</strong> ${data.error || 'Failed to boost profile'}`;
+      }
+      showToast(data.error || 'Failed to boost Naukri profile', 'error');
+    }
+  } catch (err) {
+    if (resultBox) resultBox.textContent = 'Network error during Naukri profile boost.';
+    showToast('Network error during Naukri boost', 'error');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '<span>⚡ Test & Boost Profile Now</span>';
+    }
+  }
+}
+
+async function handleDisconnectNaukri() {
+  if (!confirm('Are you sure you want to clear your saved Naukri cookie and disable the auto-booster?')) {
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/settings/naukri-disconnect', { method: 'POST' });
+    const data = await res.json();
+    if (data.success) {
+      showToast('Naukri cookie cleared and booster disabled.', 'success');
+      const cookieInput = document.getElementById('setting-naukri-cookie');
+      if (cookieInput) cookieInput.value = '';
+      const resultBox = document.getElementById('naukri-boost-result');
+      if (resultBox) resultBox.classList.add('hidden');
+      await loadSettings();
+    } else {
+      showToast(data.error || 'Failed to disconnect Naukri', 'error');
+    }
+  } catch (err) {
+    showToast('Error disconnecting Naukri', 'error');
+  }
+}
+
 // Expose globals for inline onclicks
 window.switchTab = switchTab;
 window.openAddJobModal = openAddJobModal;
@@ -2503,5 +2665,11 @@ window.closeBatchProgressModal = closeBatchProgressModal;
 window.copyDorkQuery = copyDorkQuery;
 window.toggleQuickAddDorkForm = toggleQuickAddDorkForm;
 window.handleQuickAddDorkContact = handleQuickAddDorkContact;
+window.toggleNaukriGuide = toggleNaukriGuide;
+window.toggleCookieVisibility = toggleCookieVisibility;
+window.handleSaveNaukriSettings = handleSaveNaukriSettings;
+window.handleTestNaukriBoost = handleTestNaukriBoost;
+window.handleDisconnectNaukri = handleDisconnectNaukri;
+
 
 
