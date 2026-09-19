@@ -159,8 +159,10 @@
           <div class="source-filter-wrap">
             <span class="text-xs text-muted">Source:</span>
             <select id="radar-source-select" class="custom-select-sm">
-              <option value="all">All 10+ Worldwide Sources (1,000+ Jobs)</option>
+              <option value="all">All Worldwide Sources (1,000+ Jobs)</option>
               <option value="google_form">📝 Recruiter Posts (Google Form Attached)</option>
+              <option value="unstop">🎓 Unstop (Live Verified Jobs)</option>
+              <option value="portal">🏢 Company Career Portals (Lever/Greenhouse/Ashby)</option>
               <option value="linkedin_company">🏢 LinkedIn Company Jobs (Official ID Postings)</option>
               <option value="linkedin">💼 LinkedIn Live Guest</option>
               <option value="arbeitnow">🌍 Arbeitnow (Visa & Relocation)</option>
@@ -432,20 +434,8 @@
               <input type="number" id="setting-followup-days" min="1" max="14" value="3" style="max-width: 120px;" />
             </div>
 
-            <!-- Apollo.io API Integration -->
-            <div class="form-group mt-3 pt-3" style="border-top: 1px solid var(--border-color);">
-              <label class="flex-between">
-                <span>⚡ Apollo.io API Key (Requires Paid Plan or Trial for People Search)</span>
-                <span class="badge" id="badge-apollo-status" style="background: rgba(245,158,11,0.15); color: #f59e0b; font-size: 11px;">Not Configured</span>
-              </label>
-              <input type="password" id="setting-apollo-api-key" placeholder="Paste your Apollo.io API key (Master Key)" />
-              <div class="text-xs text-muted mt-1">
-                📌 <strong>Required Endpoints:</strong> <code>api/v1/mixed_people/api_search</code> and <code>api/v1/people/match</code>. Apollo requires any paid plan (Basic/Pro) or active trial to query employees via API.
-              </div>
-            </div>
-
             <!-- Hunter.io 100% Free Option -->
-            <div class="form-group mt-3">
+            <div class="form-group mt-3 pt-3" style="border-top: 1px solid var(--border-color);">
               <label class="flex-between">
                 <span>🎯 Hunter.io API Key (100% Free Option — 25 Free Searches / Mo)</span>
                 <span class="badge" id="badge-hunter-status" style="background: rgba(245,158,11,0.15); color: #f59e0b; font-size: 11px;">Not Configured</span>
@@ -453,6 +443,18 @@
               <input type="password" id="setting-hunter-api-key" placeholder="Paste your free Hunter.io API key" />
               <div class="text-xs text-muted mt-1">
                 💡 <strong>Free Alternative:</strong> Hunter.io includes 25 free domain employee searches every month with zero credit card required. Sign up and grab your API key at <a href="https://hunter.io/api" target="_blank" rel="noopener" class="link-btn text-xs">hunter.io/api</a>.
+              </div>
+            </div>
+
+            <!-- EasyLeadz (Mr. E) API Integration -->
+            <div class="form-group mt-3 pt-3" style="border-top: 1px solid var(--border-color);">
+              <label class="flex-between">
+                <span>⚡ EasyLeadz / Mr. E API Key (Direct Phone & Work Email from LinkedIn)</span>
+                <span class="badge" id="badge-easyleadz-status" style="background: rgba(245,158,11,0.15); color: #f59e0b; font-size: 11px;">Not Configured</span>
+              </label>
+              <input type="password" id="setting-easyleadz-api-key" placeholder="Paste your EasyLeadz Enapi-Key (e.g. 5f8a...)" />
+              <div class="text-xs text-muted mt-1">
+                📌 <strong>Free Credits & Companion Chrome Extension:</strong> Automatically reveal genuine work emails and phone numbers for LinkedIn profiles. <a href="https://www.easyleadz.com/" target="_blank" rel="noopener" class="link-btn text-xs">easyleadz.com</a> &bull; <a href="https://chromewebstore.google.com/detail/mr-e-by-easyleadz-free-b2/haphbbhhknaonfloinidkcmadhfjoghc?hl=en" target="_blank" rel="noopener" class="link-btn text-xs">Mr. E Chrome Extension</a>
               </div>
             </div>
 
@@ -651,8 +653,8 @@
                 <a id="btn-dork-brave" href="#" target="_blank" rel="noopener" class="btn btn-xs btn-outline" style="border-color: rgba(251, 84, 43, 0.4); color: #fdba74;">
                   🦁 Brave Dork
                 </a>
-                <a id="btn-dork-apollo" href="#" target="_blank" rel="noopener" class="btn btn-xs btn-outline" style="border-color: rgba(251, 191, 36, 0.4); color: #fde047;">
-                  ⚡ Apollo Free Filter
+                <a id="btn-dork-easyleadz" href="https://www.easyleadz.com/" target="_blank" rel="noopener" class="btn btn-xs btn-outline" style="border-color: rgba(236, 72, 153, 0.4); color: #f472b6;" title="Open EasyLeadz / Mr. E to reveal LinkedIn emails & phones">
+                  ⚡ Mr. E / EasyLeadz
                 </a>
               </div>
               <button type="button" class="btn btn-xs btn-secondary" onclick="toggleQuickAddDorkForm()">
@@ -662,11 +664,12 @@
 
             <!-- Collapsible Quick Add Form -->
             <div id="quick-add-dork-form" class="hidden mt-3 pt-2" style="border-top: 1px solid rgba(255,255,255,0.08);">
-              <span class="text-xs text-muted mb-1 block">Paste an employee headline found via public search to auto-derive work email and add to roster:</span>
-              <div class="flex-align gap-2">
-                <input type="text" id="quick-dork-name" placeholder="Full Name (e.g. Badri Vasudevan)" class="form-control" style="font-size: 12px; height: 30px; flex: 2;" />
-                <input type="text" id="quick-dork-role" placeholder="Role (e.g. Engineering Lead)" class="form-control" style="font-size: 12px; height: 30px; flex: 2;" />
-                <input type="url" id="quick-dork-linkedin" placeholder="LinkedIn Profile URL (optional)" class="form-control" style="font-size: 12px; height: 30px; flex: 3;" />
+              <span class="text-xs text-muted mb-1 block">Paste an employee found via LinkedIn or Mr. E Chrome extension to auto-add to roster:</span>
+              <div class="flex-align gap-2 flex-wrap">
+                <input type="text" id="quick-dork-name" placeholder="Full Name (e.g. Badri Vasudevan)" class="form-control" style="font-size: 12px; height: 30px; flex: 2; min-width: 130px;" />
+                <input type="text" id="quick-dork-role" placeholder="Role (e.g. Engineering Lead)" class="form-control" style="font-size: 12px; height: 30px; flex: 2; min-width: 130px;" />
+                <input type="email" id="quick-dork-email" placeholder="Email / Mr. E Revealed (optional)" class="form-control" style="font-size: 12px; height: 30px; flex: 2; min-width: 140px;" />
+                <input type="url" id="quick-dork-linkedin" placeholder="LinkedIn Profile URL (optional)" class="form-control" style="font-size: 12px; height: 30px; flex: 2; min-width: 140px;" />
                 <button type="button" class="btn btn-xs btn-primary" onclick="handleQuickAddDorkContact()" style="white-space: nowrap; height: 30px;">
                   Add Contact
                 </button>
@@ -677,11 +680,8 @@
           <!-- Live Discovered Decision Makers Preview Box -->
           <div id="decision-makers-box" class="decision-makers-box hidden mb-3">
             <div class="flex-between mb-2">
-              <span class="text-xs font-semibold text-emerald">✨ Discovered 5-6 Key Insiders (Official Corporate & Apollo Channels):</span>
+              <span class="text-xs font-semibold text-emerald">✨ Discovered 5-6 Key Insiders (Official Corporate & Public Profiles):</span>
               <div class="btn-group">
-                <a id="btn-apollo-company-link" href="#" target="_blank" rel="noopener" class="btn btn-xs btn-outline" style="border-color: #fbbf24; color: #fbbf24;" title="Open Apollo.io people search directly filtered for this company">
-                  ⚡ Open Apollo.io Company Filter
-                </a>
                 <button class="btn btn-xs btn-primary" id="btn-batch-save-contacts">
                   ➕ Batch Add All to Roster
                 </button>
@@ -743,6 +743,10 @@
               <label>Email Address</label>
               <input type="email" id="contact-email" placeholder="name@company.com" />
             </div>
+            <div class="form-group">
+              <label>Phone Number (Optional)</label>
+              <input type="text" id="contact-phone" placeholder="e.g. +91 98765 43210" />
+            </div>
             <div class="form-group full-width">
               <label>LinkedIn Profile URL</label>
               <input type="url" id="contact-linkedin" placeholder="https://linkedin.com/in/..." />
@@ -759,6 +763,47 @@
         <div class="modal-footer">
           <button type="button" class="btn btn-outline" onclick="closeAddContactSubModal()">Cancel</button>
           <button type="submit" class="btn btn-primary">Save Contact</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL: EDIT CONTACT -->
+  <div class="modal-backdrop hidden" id="modal-edit-contact">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3>Edit Referral Contact</h3>
+        <button class="modal-close" onclick="closeEditContactModal()">&times;</button>
+      </div>
+      <form id="edit-contact-form">
+        <input type="hidden" id="edit-contact-id" />
+        <div class="modal-body">
+          <div class="form-grid">
+            <div class="form-group">
+              <label>Contact Full Name <span class="required">*</span></label>
+              <input type="text" id="edit-contact-name" required />
+            </div>
+            <div class="form-group">
+              <label>Role at Company <span class="required">*</span></label>
+              <input type="text" id="edit-contact-role" required />
+            </div>
+            <div class="form-group">
+              <label>Email Address</label>
+              <input type="email" id="edit-contact-email" placeholder="name@company.com" />
+            </div>
+            <div class="form-group">
+              <label>Phone Number</label>
+              <input type="text" id="edit-contact-phone" placeholder="+91 98765 43210" />
+            </div>
+            <div class="form-group full-width">
+              <label>LinkedIn Profile URL</label>
+              <input type="url" id="edit-contact-linkedin" />
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer flex-between">
+          <button type="button" class="btn btn-outline" onclick="closeEditContactModal()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save Changes</button>
         </div>
       </form>
     </div>

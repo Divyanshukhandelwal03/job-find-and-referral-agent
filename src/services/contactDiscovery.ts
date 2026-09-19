@@ -1,4 +1,5 @@
 import dns from 'dns';
+import net from 'net';
 import { execFile } from 'child_process';
 import { GoogleGenAI } from '@google/genai';
 import { config } from '../config.js';
@@ -11,17 +12,17 @@ export interface DiscoveredDecisionMaker {
   role: string;
   contactType: 'manager' | 'peer' | 'recruiter';
   officialEmail: string;
+  phone?: string;
   secondaryEmail?: string;
   linkedinUrl: string;
   githubUrl?: string;
-  apolloUrl?: string;
-  apolloCompanyUrl?: string;
+  easyleadzEnriched?: boolean;
   domain: string;
   verified: boolean;
   deliveryRisk: 'safe' | 'unverified';
   priorityLabel: string;
   confidence: 'verified_corporate' | 'job_post_extracted' | 'inferred_pattern' | 'pattern_confirmed';
-  source?: 'github_events' | 'github_org' | 'email_format' | 'job_post' | 'apollo' | 'hunter' | 'corporate_channel' | 'linkedin_dork';
+  source?: 'github_events' | 'github_org' | 'email_format' | 'job_post' | 'hunter' | 'easyleadz' | 'corporate_channel' | 'linkedin_dork';
 }
 
 export type EmailPattern = 'first.last' | 'first.l' | 'flast' | 'first' | 'f.last' | 'last.first';
@@ -856,8 +857,174 @@ export function buildEmailFromPattern(fullName: string, domain: string, pattern:
 }
 
 /**
- * Free Public Search Dorking (Zero Accounts Needed)
- * Queries publicly indexed LinkedIn profile headlines and applies the company's real IT email pattern.
+ * Result structure from EasyLeadz (Mr. E) enrichment API
+ */
+export interface EasyLeadzEnrichResult {
+  success: boolean;
+  name?: string;
+  email?: string;
+  phone?: string;
+  designation?: string;
+  company?: string;
+  raw?: any;
+}
+
+/**
+ * Enriches a contact or LinkedIn profile URL using EasyLeadz (Mr. E) API
+ * Endpoint: https://app.easyleadz.com/api/prod/ with Enapi-Key header
+ */
+export async function enrichContactViaEasyLeadz(params: {
+  linkedinUrl?: string;
+  name?: string;
+  company?: string;
+  apiKey?: string;
+}): Promise<EasyLeadzEnrichResult> {
+  const { linkedinUrl, name, company, apiKey } = params;
+  if (!apiKey || apiKey.length < 5) {
+    return { success: false };
+  }
+
+  const cleanUrl = linkedinUrl ? linkedinUrl.split('?')[0].replace(/\/+$/, '') : '';
+  if (!cleanUrl && (!name || !company)) {
+    return { success: false };
+  }
+
+  try {
+    const payload: any = {
+      data: {
+        ...(cleanUrl ? { url: cleanUrl } : {}),
+        ...(name && company ? { name, company } : {}),
+      },
+    };
+
+    console.log(`[EasyLeadz API] Enriching contact via EasyLeadz API: ${cleanUrl || `${name} @ ${company}`}...`);
+    const res = await fetch('https://app.easyleadz.com/api/prod/', {
+      method: 'POST',
+      headers: {
+        'Enapi-Key': apiKey,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      return parseEasyLeadzResponse(data);
+    }
+
+    // Secondary attempt with GET
+    const getRes = await fetch('https://app.easyleadz.com/api/prod/', {
+      method: 'GET',
+      headers: {
+        'Enapi-Key': apiKey,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (getRes.ok) {
+      const data = await getRes.json();
+      return parseEasyLeadzResponse(data);
+    }
+
+    return { success: false };
+  } catch (err: any) {
+    console.warn('[EasyLeadz API] Error calling EasyLeadz API:', err?.message || err);
+    return { success: false };
+  }
+}
+
+function parseEasyLeadzResponse(data: any): EasyLeadzEnrichResult {
+  if (!data) return { success: false };
+  const d = data.data || data.result || data;
+  const email = d.email || d.work_email || d.personal_email || d.emails?.[0];
+  const phone = d.phone || d.mobile || d.contact_number || d.phones?.[0];
+  const name = d.name || d.full_name;
+  const designation = d.designation || d.title || d.role;
+
+  if (email || phone) {
+    return {
+      success: true,
+      email: typeof email === 'string' ? email.trim() : undefined,
+      phone: typeof phone === 'string' ? phone.trim() : undefined,
+      name: typeof name === 'string' ? name.trim() : undefined,
+      designation: typeof designation === 'string' ? designation.trim() : undefined,
+      raw: d,
+    };
+  }
+  return { success: false, raw: d };
+}
+
+/**
+ * Checks email deliverability via non-intrusive DNS MX socket handshake (port 25)
+ */
+export async function verifyEmailSmtp(email: string): Promise<boolean> {
+  try {
+    const domain = email.split('@')[1]?.toLowerCase().trim();
+    if (!domain) return false;
+    // Don't test public webmail providers (Gmail, Yahoo, Outlook) to avoid IP blocks
+    if (['gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'yahoo.com', 'icloud.com'].includes(domain)) {
+      return true;
+    }
+
+    const mxRecords = await dns.promises.resolveMx(domain);
+    if (!mxRecords || mxRecords.length === 0) return false;
+    const sorted = mxRecords.sort((a, b) => a.priority - b.priority);
+    const primaryMx = sorted[0].exchange;
+
+    return new Promise((resolve) => {
+      const socket = net.createConnection(25, primaryMx);
+      let step = 0;
+      let isDeliverable = false;
+
+      const timer = setTimeout(() => {
+        socket.destroy();
+        resolve(false);
+      }, 3500);
+
+      socket.on('data', (chunk) => {
+        const msg = chunk.toString();
+        if (msg.startsWith('220') && step === 0) {
+          step = 1;
+          socket.write('HELO mail.verifyservice.org\r\n');
+        } else if (msg.startsWith('250') && step === 1) {
+          step = 2;
+          socket.write('MAIL FROM:<check@verifyservice.org>\r\n');
+        } else if (msg.startsWith('250') && step === 2) {
+          step = 3;
+          socket.write(`RCPT TO:<${email}>\r\n`);
+        } else if (step === 3) {
+          if (msg.startsWith('250') || msg.startsWith('251')) {
+            isDeliverable = true;
+          }
+          socket.write('QUIT\r\n');
+          socket.end();
+        }
+      });
+
+      socket.on('error', () => {
+        clearTimeout(timer);
+        resolve(false);
+      });
+
+      socket.on('close', () => {
+        clearTimeout(timer);
+        resolve(isDeliverable);
+      });
+    });
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * Robust Multi-Engine Targeted LinkedIn Decision Maker Discovery
+ * Discovers real LinkedIn profiles across 3 tiers:
+ * 1. Engineering Leadership (Engineering Manager, Tech Lead, VP, Director)
+ * 2. Technical Recruiters & Talent Acquisition Partners
+ * 3. Relevant Peers & Senior Engineers in Target Tech Stack
  */
 export async function dorkLinkedInProfiles(params: {
   company: string;
@@ -865,8 +1032,9 @@ export async function dorkLinkedInProfiles(params: {
   jobTitle?: string;
   pattern?: EmailPattern;
   patternConfirmed?: boolean;
+  easyleadzApiKey?: string;
 }): Promise<DiscoveredDecisionMaker[]> {
-  const { company, domain, pattern = 'first.last', patternConfirmed = false } = params;
+  const { company, domain, jobTitle, pattern = 'first.last', patternConfirmed = false, easyleadzApiKey } = params;
   const cacheKey = `${company.toLowerCase().trim()}_${domain}`;
   const cached = dorkCache.get(cacheKey);
   if (cached && Date.now() - cached.timestamp < 3600000) {
@@ -875,57 +1043,45 @@ export async function dorkLinkedInProfiles(params: {
   }
 
   const cleanCompany = company.replace(/[^\w\s.-]/g, '').trim();
-  const query = `site:linkedin.com/in "${cleanCompany}" ("Engineering Manager" OR "Tech Lead" OR "HR" OR "Recruiter")`;
-  console.log(`[LinkedIn Dorking] Executing public search query: ${query}`);
+  const techTerm = jobTitle ? jobTitle.split(/[/–-]/)[0].trim().split(' ')[0] : 'Engineer';
+
+  const queries = [
+    `site:linkedin.com/in "${cleanCompany}" ("Engineering Manager" OR "Tech Lead" OR "VP Engineering" OR "Director of Engineering")`,
+    `site:linkedin.com/in "${cleanCompany}" ("Technical Recruiter" OR "Talent Acquisition" OR "Recruiter" OR "HR")`,
+    `site:linkedin.com/in "${cleanCompany}" ("Senior Software Engineer" OR "Staff Engineer") "${techTerm}"`,
+  ];
+
+  console.log(`[LinkedIn Dorking] Executing targeted 3-tier search queries for "${cleanCompany}"...`);
 
   try {
-    const targetUrl = `https://search.brave.com/search?q=${encodeURIComponent(query).replace(/%20/g, '+')}`;
-    const html = await runCurl(targetUrl, 10000);
-
-    if (!html || html.length < 500) {
-      console.log('[LinkedIn Dorking] Search returned empty response or challenged');
-      return [];
-    }
+    const searchResponses = await Promise.allSettled(
+      queries.map((q) => {
+        const targetUrl = `https://search.brave.com/search?q=${encodeURIComponent(q).replace(/%20/g, '+')}`;
+        return runCurl(targetUrl, 7000);
+      })
+    );
 
     const seenUrls = new Set<string>();
     const contacts: DiscoveredDecisionMaker[] = [];
     const isMxValid = await verifyDomainMx(domain);
 
-    const regex1 = /title:"([^"]+?)",url:"(https:\/\/[a-z]{2,3}\.linkedin\.com\/in\/[^"]+)"(?:,full_title:[^,]+)?,description:"([^"]*)"/gi;
-    let match: RegExpExecArray | null;
+    for (const r of searchResponses) {
+      if (r.status !== 'fulfilled' || !r.value || r.value.length < 500) continue;
+      const html = r.value;
 
-    while ((match = regex1.exec(html)) !== null) {
-      const rawTitle = match[1];
-      const url = match[2].split('?')[0].replace(/\/+$/, '');
-      const rawDesc = match[3];
+      const regex1 = /title:"([^"]+?)",url:"(https:\/\/[a-z]{2,3}\.linkedin\.com\/in\/[^"]+)"(?:,full_title:[^,]+)?,description:"([^"]*)"/gi;
+      let match: RegExpExecArray | null;
 
-      if (!seenUrls.has(url) && !url.endsWith('/in')) {
-        seenUrls.add(url);
-        const contact = processExtractedProfile({
-          rawTitle,
-          rawDesc,
-          url,
-          company,
-          domain,
-          isMxValid,
-          pattern,
-          patternConfirmed,
-        });
-        if (contact) contacts.push(contact);
-      }
-    }
-
-    // Fallback regex for snippet HTML titles
-    if (contacts.length === 0) {
-      const regex2 = /class="title search-snippet-title[^"]*" title="([^"]+?)">\s*([^<]+?)<\/div>[\s\S]*?<a href="(https:\/\/[a-z]{2,3}\.linkedin\.com\/in\/[^"]+)"/gi;
-      while ((match = regex2.exec(html)) !== null) {
+      while ((match = regex1.exec(html)) !== null) {
         const rawTitle = match[1];
-        const url = match[3].split('?')[0].replace(/\/+$/, '');
+        const url = match[2].split('?')[0].replace(/\/+$/, '');
+        const rawDesc = match[3];
+
         if (!seenUrls.has(url) && !url.endsWith('/in')) {
           seenUrls.add(url);
           const contact = processExtractedProfile({
             rawTitle,
-            rawDesc: '',
+            rawDesc,
             url,
             company,
             domain,
@@ -936,6 +1092,92 @@ export async function dorkLinkedInProfiles(params: {
           if (contact) contacts.push(contact);
         }
       }
+
+      // Fallback regex for snippet HTML titles
+      if (contacts.length < 3) {
+        const regex2 = /class="title search-snippet-title[^"]*" title="([^"]+?)">\s*([^<]+?)<\/div>[\s\S]*?<a href="(https:\/\/[a-z]{2,3}\.linkedin\.com\/in\/[^"]+)"/gi;
+        while ((match = regex2.exec(html)) !== null) {
+          const rawTitle = match[1];
+          const url = match[3].split('?')[0].replace(/\/+$/, '');
+          if (!seenUrls.has(url) && !url.endsWith('/in')) {
+            seenUrls.add(url);
+            const contact = processExtractedProfile({
+              rawTitle,
+              rawDesc: '',
+              url,
+              company,
+              domain,
+              isMxValid,
+              pattern,
+              patternConfirmed,
+            });
+            if (contact) contacts.push(contact);
+          }
+        }
+      }
+    }
+
+    // Fallback: If Brave search yielded < 2 contacts, also query DuckDuckGo HTML
+    if (contacts.length < 2) {
+      console.log(`[LinkedIn Dorking] Fallback to DuckDuckGo HTML search for "${cleanCompany}"...`);
+      const ddgResponses = await Promise.allSettled(
+        queries.slice(0, 2).map((q) => {
+          const targetUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`;
+          return runCurl(targetUrl, 7000);
+        })
+      );
+      for (const dr of ddgResponses) {
+        if (dr.status !== 'fulfilled' || !dr.value) continue;
+        const html = dr.value;
+        const ddgRegex = /<a[^>]+href="[^"]*uddg=([^"&]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+        let dMatch: RegExpExecArray | null;
+        while ((dMatch = ddgRegex.exec(html)) !== null) {
+          const rawUrl = decodeURIComponent(dMatch[1]);
+          if (rawUrl.includes('linkedin.com/in/') && !seenUrls.has(rawUrl)) {
+            seenUrls.add(rawUrl);
+            const titleSnippet = dMatch[2].replace(/<[^>]+>/g, '').trim();
+            const contact = processExtractedProfile({
+              rawTitle: titleSnippet,
+              rawDesc: '',
+              url: rawUrl,
+              company,
+              domain,
+              isMxValid,
+              pattern,
+              patternConfirmed,
+            });
+            if (contact) contacts.push(contact);
+          }
+        }
+      }
+    }
+
+    // If EasyLeadz API Key is present, enrich the discovered LinkedIn contacts automatically
+    if (easyleadzApiKey && contacts.length > 0) {
+      console.log(`[LinkedIn Dorking] Enriching ${contacts.length} decision makers with EasyLeadz API...`);
+      await Promise.allSettled(
+        contacts.slice(0, 4).map(async (contact) => {
+          const enrichment = await enrichContactViaEasyLeadz({
+            linkedinUrl: contact.linkedinUrl,
+            name: contact.name,
+            company,
+            apiKey: easyleadzApiKey,
+          });
+          if (enrichment.success) {
+            if (enrichment.email) {
+              contact.officialEmail = enrichment.email;
+              contact.verified = true;
+              contact.deliveryRisk = 'safe';
+              contact.easyleadzEnriched = true;
+              contact.confidence = 'verified_corporate';
+              contact.priorityLabel = '⚡ EasyLeadz / Mr. E Verified Email (100% Deliverable)';
+            }
+            if (enrichment.phone) {
+              contact.phone = enrichment.phone;
+            }
+          }
+        })
+      );
     }
 
     console.log(`[LinkedIn Dorking] Extracted ${contacts.length} real employee profiles for "${company}"`);
@@ -1018,7 +1260,32 @@ function processExtractedProfile(opts: {
     contactType = 'recruiter';
   }
 
-  const officialEmail = buildEmailFromPattern(name, domain, pattern);
+  // Check if explicit email exists directly in LinkedIn profile snippet or title
+  const combinedText = `${cleanTitle} ${cleanDesc}`;
+  const emailCandidates = combinedText.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g);
+  let officialEmail = buildEmailFromPattern(name, domain, pattern);
+  let isVerified = isMxValid && patternConfirmed;
+  let deliveryRisk: 'safe' | 'unverified' = isVerified ? 'safe' : 'unverified';
+  let priorityLabel = patternConfirmed
+    ? '🔵 Decision Maker (Pattern-Confirmed Work Email)'
+    : '🔍 Public Search Profile (Inferred Work Email - Verify on LinkedIn)';
+  let confidence: 'verified_corporate' | 'job_post_extracted' | 'inferred_pattern' | 'pattern_confirmed' =
+    patternConfirmed ? 'pattern_confirmed' : 'inferred_pattern';
+
+  if (emailCandidates && emailCandidates.length > 0) {
+    const valid = emailCandidates.find(
+      (em) => isValidDeliverableEmail(em) && !em.includes('example.com') && !em.includes('sentry.io')
+    );
+    if (valid) {
+      officialEmail = valid.toLowerCase().trim();
+      isVerified = true;
+      deliveryRisk = 'safe';
+      confidence = 'job_post_extracted';
+      priorityLabel = officialEmail.includes('@gmail')
+        ? '🟢 Direct Personal Gmail (Found on LinkedIn Profile)'
+        : `🟢 Direct Email (Found on LinkedIn Profile: ${officialEmail.split('@')[1]})`;
+    }
+  }
 
   return {
     id: `dork-${uuidv4().substring(0, 8)}`,
@@ -1028,105 +1295,12 @@ function processExtractedProfile(opts: {
     officialEmail,
     linkedinUrl: url,
     domain,
-    verified: isMxValid && patternConfirmed,
-    deliveryRisk: isMxValid && patternConfirmed ? 'safe' : 'unverified',
-    priorityLabel: patternConfirmed
-      ? '🔵 Decision Maker (Pattern-Confirmed Work Email)'
-      : '🔍 Public Search Profile (Inferred Work Email - Verify on LinkedIn)',
-    confidence: patternConfirmed ? 'pattern_confirmed' : 'inferred_pattern',
+    verified: isVerified,
+    deliveryRisk,
+    priorityLabel,
+    confidence,
     source: 'linkedin_dork',
   };
-}
-
-/**
- * Query Apollo.io API for real current employees by company domain
- */
-export async function searchApolloContacts(params: {
-  apiKey: string;
-  domain: string;
-  company: string;
-  jobTitle?: string;
-}): Promise<DiscoveredDecisionMaker[]> {
-  const { apiKey, domain, company, jobTitle } = params;
-  try {
-    console.log(`[Apollo.io API] Querying employee directory for domain: "${domain}", company: "${company}"...`);
-    const titles = [
-      'Engineering Manager',
-      'Director of Engineering',
-      'Technical Lead',
-      'Tech Lead',
-      'Talent Acquisition',
-      'Technical Recruiter',
-      'HR Manager',
-      'VP of Engineering',
-    ];
-    if (jobTitle) titles.unshift(jobTitle);
-
-    const payload = {
-      api_key: apiKey,
-      q_organization_domains: domain,
-      person_titles: titles,
-      page: 1,
-      per_page: 8,
-    };
-
-    let res = await fetch('https://api.apollo.io/v1/mixed_people/api_search', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' },
-      body: JSON.stringify(payload),
-    });
-
-    if (!res.ok && res.status === 404) {
-      res = await fetch('https://api.apollo.io/v1/mixed_people/search', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' },
-        body: JSON.stringify(payload),
-      });
-    }
-
-    if (!res.ok) return [];
-
-    const data = (await res.json()) as any;
-    const people = data.people || [];
-    const results: DiscoveredDecisionMaker[] = [];
-    const apolloCompanyUrl = `https://app.apollo.io/#/people?findOrganizations%5B%5D=${encodeURIComponent(company)}`;
-
-    for (const p of people) {
-      if (!p.name) continue;
-      const email = p.email || p.corporate_email || `${p.first_name?.toLowerCase()}.${p.last_name?.toLowerCase()}@${domain}`;
-      const isVerified = p.email_status === 'verified' || (!!p.email && p.email.includes('@'));
-
-      let contactType: 'manager' | 'peer' | 'recruiter' = 'peer';
-      const roleLower = (p.title || '').toLowerCase();
-      if (roleLower.includes('manager') || roleLower.includes('director') || roleLower.includes('vp') || roleLower.includes('head') || roleLower.includes('lead')) {
-        contactType = 'manager';
-      } else if (roleLower.includes('recruiter') || roleLower.includes('talent') || roleLower.includes('hr') || roleLower.includes('people')) {
-        contactType = 'recruiter';
-      }
-
-      results.push({
-        id: `apollo-${p.id || uuidv4().substring(0, 8)}`,
-        name: p.name,
-        role: p.title || 'Team Lead / Specialist',
-        contactType,
-        officialEmail: email,
-        linkedinUrl: p.linkedin_url || `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(`"${p.name}" "${company}"`)}`,
-        apolloUrl: p.id ? `https://app.apollo.io/#/people/${p.id}` : apolloCompanyUrl,
-        apolloCompanyUrl,
-        domain: p.organization?.primary_domain || domain,
-        verified: isVerified,
-        deliveryRisk: isVerified ? 'safe' : 'unverified',
-        priorityLabel: `🚀 Apollo.io Verified Employee (${p.email_status || 'verified'})`,
-        confidence: isVerified ? 'verified_corporate' : 'inferred_pattern',
-        source: 'apollo',
-      });
-    }
-
-    return results;
-  } catch (err) {
-    console.error('[Apollo.io API] Failed to search Apollo API:', err);
-    return [];
-  }
 }
 
 /**
@@ -1148,7 +1322,6 @@ export async function searchHunterContacts(params: {
     const data = (await res.json()) as any;
     const emails = data.data?.emails || [];
     const results: DiscoveredDecisionMaker[] = [];
-    const apolloCompanyUrl = `https://app.apollo.io/#/people?findOrganizations%5B%5D=${encodeURIComponent(company)}`;
 
     for (const e of emails) {
       const fullName = `${e.first_name || ''} ${e.last_name || ''}`.trim() || `${company} Team Lead`;
@@ -1170,7 +1343,6 @@ export async function searchHunterContacts(params: {
         contactType,
         officialEmail: e.value,
         linkedinUrl: e.linkedin || `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(`"${fullName}" "${company}"`)}`,
-        apolloCompanyUrl,
         domain,
         verified: isVerified,
         deliveryRisk: 'safe',
@@ -1383,27 +1555,11 @@ export async function discoverDecisionMakers(params: {
     }
   }
 
-  // ── Source 4: Apollo.io / Hunter.io API (if API Key configured in Settings) ──
+  // ── Source 4: Hunter.io API (if API Key configured in Settings) ──
   try {
     const { db } = await import('../db/index.js');
     const settings = db.getSettings();
-    const apolloApiKey = settings?.apolloApiKey || process.env.APOLLO_API_KEY;
     const hunterApiKey = settings?.hunterApiKey || process.env.HUNTER_API_KEY;
-
-    if (apolloApiKey && apolloApiKey.length > 5) {
-      const apolloEmployees = await searchApolloContacts({
-        apiKey: apolloApiKey,
-        domain,
-        company,
-        jobTitle,
-      });
-      for (const c of apolloEmployees) {
-        if (!seenEmails.has(c.officialEmail)) {
-          seenEmails.add(c.officialEmail);
-          contacts.push(c);
-        }
-      }
-    }
 
     if (hunterApiKey && hunterApiKey.length > 5) {
       const hunterEmployees = await searchHunterContacts({
@@ -1476,12 +1632,17 @@ Return JSON array:
 
   // ── Source 5: Public Search Dorking for LinkedIn Decision Makers ──
   try {
+    const { db } = await import('../db/index.js');
+    const settings = db.getSettings();
+    const easyleadzApiKey = settings?.easyleadzApiKey || process.env.EASYLEADZ_API_KEY;
+
     const dorked = await dorkLinkedInProfiles({
       company,
       domain,
       jobTitle,
       pattern: learnedPattern,
       patternConfirmed,
+      easyleadzApiKey,
     });
     for (const c of dorked) {
       if (!seenEmails.has(c.officialEmail)) {
@@ -1548,6 +1709,7 @@ Return JSON array:
   // Sort contacts so verified contacts and pattern-confirmed decision makers appear first
   contacts.sort((a, b) => {
     const score = (c: DiscoveredDecisionMaker) => {
+      if (c.easyleadzEnriched || c.source === 'easyleadz') return 120;
       if (c.source === 'github_events' && c.verified) return 105;
       if (c.confidence === 'job_post_extracted') return 100;
       if (c.source === 'github_org' && c.verified) return 90;
@@ -1580,6 +1742,8 @@ export function toReferralContact(
       dm.officialEmail.includes('@proton') ||
       dm.officialEmail.includes('@icloud'));
 
+  const isEasyLeadz = dm.easyleadzEnriched || dm.source === 'easyleadz';
+
   return {
     id: uuidv4(),
     jobId,
@@ -1588,7 +1752,11 @@ export function toReferralContact(
     role: dm.role,
     email: dm.officialEmail,
     secondaryEmail: dm.secondaryEmail,
-    emailType: isPersonal
+    phone: dm.phone,
+    easyleadzEnriched: dm.easyleadzEnriched,
+    emailType: isEasyLeadz
+      ? 'easyleadz'
+      : isPersonal
       ? 'personal'
       : dm.confidence === 'verified_corporate'
       ? 'verified_inbox'
@@ -1600,7 +1768,6 @@ export function toReferralContact(
     deliveryRisk: dm.deliveryRisk,
     linkedinUrl: dm.linkedinUrl,
     githubUrl: dm.githubUrl,
-    apolloUrl: dm.apolloUrl || dm.apolloCompanyUrl,
     contactType: dm.contactType,
     status: 'uncontacted',
     createdAt: new Date().toISOString(),

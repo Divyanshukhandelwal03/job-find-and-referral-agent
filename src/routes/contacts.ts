@@ -1,7 +1,12 @@
 import { Router, Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { db, ReferralContact } from '../db/index.js';
-import { discoverDecisionMakers, toReferralContact, resolveCompanyDomain } from '../services/contactDiscovery.js';
+import {
+  discoverDecisionMakers,
+  toReferralContact,
+  resolveCompanyDomain,
+  enrichContactViaEasyLeadz,
+} from '../services/contactDiscovery.js';
 
 const router = Router();
 
@@ -119,13 +124,91 @@ router.put('/:id', (req: Request, res: Response) => {
     role: req.body.role !== undefined ? req.body.role : existing.role,
     company: req.body.company !== undefined ? req.body.company : existing.company,
     email: req.body.email !== undefined ? req.body.email : existing.email,
+    secondaryEmail: req.body.secondaryEmail !== undefined ? req.body.secondaryEmail : existing.secondaryEmail,
+    phone: req.body.phone !== undefined ? req.body.phone : existing.phone,
     linkedinUrl: req.body.linkedinUrl !== undefined ? req.body.linkedinUrl : existing.linkedinUrl,
     contactType: req.body.contactType !== undefined ? req.body.contactType : existing.contactType,
     status: req.body.status !== undefined ? req.body.status : existing.status,
+    verified: req.body.verified !== undefined ? req.body.verified : existing.verified,
+    deliveryRisk: req.body.deliveryRisk !== undefined ? req.body.deliveryRisk : existing.deliveryRisk,
+    emailType: req.body.emailType !== undefined ? req.body.emailType : existing.emailType,
+    easyleadzEnriched: req.body.easyleadzEnriched !== undefined ? req.body.easyleadzEnriched : existing.easyleadzEnriched,
   };
 
   const saved = db.saveContact(updated);
   res.json({ success: true, contact: saved });
+});
+
+// ENRICH CONTACT VIA EASYLEADZ / MR. E
+router.post('/enrich-easyleadz', async (req: Request, res: Response) => {
+  try {
+    const { contactId, linkedinUrl, name, company } = req.body;
+    const settings = db.getSettings();
+    const apiKey = settings?.easyleadzApiKey || process.env.EASYLEADZ_API_KEY;
+
+    if (!apiKey) {
+      return res.status(400).json({
+        success: false,
+        error: 'EasyLeadz API key not configured. Add your key in Settings or use the Mr. E Chrome extension to reveal emails.',
+      });
+    }
+
+    let targetUrl = linkedinUrl;
+    let targetName = name;
+    let targetCompany = company;
+    let existingContact: ReferralContact | undefined;
+
+    if (contactId) {
+      const contacts = db.getContacts();
+      existingContact = contacts.find((c) => c.id === contactId);
+      if (existingContact) {
+        targetUrl = targetUrl || existingContact.linkedinUrl;
+        targetName = targetName || existingContact.name;
+        targetCompany = targetCompany || existingContact.company;
+      }
+    }
+
+    if (!targetUrl && (!targetName || !targetCompany)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Either linkedinUrl or both name and company are required for EasyLeadz lookup',
+      });
+    }
+
+    const enrichment = await enrichContactViaEasyLeadz({
+      linkedinUrl: targetUrl,
+      name: targetName,
+      company: targetCompany,
+      apiKey,
+    });
+
+    if (!enrichment.success) {
+      return res.status(404).json({
+        success: false,
+        error: 'EasyLeadz could not find email/phone for this profile or account credits exhausted.',
+      });
+    }
+
+    let savedContact: ReferralContact | undefined;
+    if (existingContact) {
+      existingContact.email = enrichment.email || existingContact.email;
+      if (enrichment.phone) existingContact.phone = enrichment.phone;
+      existingContact.easyleadzEnriched = true;
+      existingContact.verified = true;
+      existingContact.deliveryRisk = 'safe';
+      existingContact.emailType = 'easyleadz';
+      savedContact = db.saveContact(existingContact);
+    }
+
+    res.json({
+      success: true,
+      contact: savedContact || existingContact,
+      enrichment,
+    });
+  } catch (err: any) {
+    console.error('Error enriching via EasyLeadz:', err);
+    res.status(500).json({ success: false, error: err?.message || 'Failed to enrich via EasyLeadz' });
+  }
 });
 
 // DELETE contact

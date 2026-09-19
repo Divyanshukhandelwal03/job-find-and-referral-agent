@@ -21,7 +21,7 @@ An advanced, autonomous AI-powered job referral, recruiter discovery, and cold o
   ```
   site:linkedin.com/in "Company Name" ("Engineering Manager" OR "Tech Lead" OR "HR" OR "Recruiter")
   ```
-- Instant deep-links to Google, Bing, DuckDuckGo, Brave, and Apollo.io organization filters.
+- Instant deep-links to Google, Bing, DuckDuckGo, and Brave search filters.
 - Identifies corporate email patterns (`first.last`, `first`, `f.last`) with delivery risk indicators.
 
 ### 3. 🎯 AI Resume Parser & Profile Hub

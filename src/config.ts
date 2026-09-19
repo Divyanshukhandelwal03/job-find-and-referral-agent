@@ -37,6 +37,7 @@ export const config = {
   dbPath: path.resolve(process.cwd(), process.env.DATA_DIR || './data', 'db.json'),
   googleClientId: process.env.GOOGLE_CLIENT_ID || '',
   googleClientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
+  easyleadzApiKey: process.env.EASYLEADZ_API_KEY || process.env.MR_E_API_KEY || '',
 };
 
 // Ensure directories exist

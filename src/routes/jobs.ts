@@ -90,6 +90,7 @@ router.post('/import-discovered', async (req: Request, res: Response) => {
       source: source || 'manual',
       visaSponsorship: Boolean(finalVisa),
       remote: Boolean(finalRemote),
+      applyUrl: (url || undefined),
       googleFormUrl: detectedFormUrl || undefined,
       googleFormStatus: finalGoogleFormStatus || undefined,
       googleFormStatusReason: finalGoogleFormStatusReason || undefined,

@@ -12,6 +12,7 @@ export interface DiscoveredJob {
   source:
     | 'linkedin'
     | 'linkedin_company'
+    | 'unstop'
     | 'arbeitnow'
     | 'remotive'
     | 'remoteok'
@@ -49,7 +50,9 @@ export interface JobSearchFilters {
     | 'all'
     | 'linkedin'
     | 'linkedin_company'
+    | 'unstop'
     | 'google_form'
+    | 'portal'
     | 'arbeitnow'
     | 'remotive'
     | 'remoteok'
@@ -584,89 +587,6 @@ export async function validateGoogleFormStatus(rawUrl: string): Promise<GoogleFo
 
 const recruiterFormCache = new Map<string, { timestamp: number; jobs: DiscoveredJob[] }>();
 
-const VERIFIED_RECRUITER_FORM_POSTS: Array<{
-  title: string;
-  company: string;
-  recruiterName: string;
-  postUrl: string;
-  googleFormUrl: string;
-  description: string;
-  experienceRange: string;
-}> = [
-  {
-    title: 'Software Development Engineer (Backend / Distributed Systems)',
-    company: 'PhonePe',
-    recruiterName: 'Abhishek Gupta (Lead Technical Recruiter)',
-    postUrl: 'https://www.linkedin.com/posts/a1bhi2_google-forms-sign-in-activity-6947489493700534272-Jpis',
-    googleFormUrl: 'https://forms.gle/ZzgZfSPv2uTKfcGb8',
-    description: 'Direct referral application for Backend Engineers at PhonePe. Requirements: Java, Go, Distributed Systems, Microservices.',
-    experienceRange: '2-6 years',
-  },
-  {
-    title: 'Full-Stack Software Engineer (React / Node.js / TypeScript)',
-    company: 'Hiver',
-    recruiterName: 'Neethu D N (Tech Talent Acquisition)',
-    postUrl: 'https://www.linkedin.com/posts/neethudn_google-forms-easily-create-and-analyze-activity-7005967397635461122-4MyN',
-    googleFormUrl: 'https://forms.gle/Mk6gDXKmc3dxPcTb8',
-    description: 'Engineering openings and referral pool at Hiver. Fill out the screening form for direct review by hiring managers.',
-    experienceRange: '2-5 years',
-  },
-  {
-    title: 'Senior Distributed Systems & Platform Engineer (Go / Kafka / K8s)',
-    company: 'ULTIMS',
-    recruiterName: 'Alejandro Vance (Technical Hiring Lead)',
-    postUrl: 'https://www.linkedin.com/posts/ultims_tech-hiring-referral-activity-7193849102837482910',
-    googleFormUrl: 'https://forms.gle/FAnaQdZ7bzddbPzL7',
-    description: 'Direct engineering recruitment for high-scale e-commerce platform. Stack: Go, React, Kafka, Kubernetes, AI automation.',
-    experienceRange: '2-7 years',
-  },
-  {
-    title: 'OpenAI Technical Collaborator & AI Research Engineer',
-    company: 'OpenAI',
-    recruiterName: 'OpenAI Engineering & Research Talent Team',
-    postUrl: 'https://www.linkedin.com/posts/openai_creative-collaborators-generative-ai-activity-7182938401928374651',
-    googleFormUrl: 'https://forms.gle/8npHSMnE5hfSxkkU9',
-    description: 'Connecting with software engineers and AI practitioners building next-generation multimodal tools and models.',
-    experienceRange: '1-6 years',
-  },
-  {
-    title: 'Core Systems & Backend Engineer (Java / Distributed Systems)',
-    company: 'Fintech Systems Group',
-    recruiterName: 'Priyanka Rao (Senior Technical Recruiter)',
-    postUrl: 'https://www.linkedin.com/posts/priyankarao_backend-hiring-activity-7124987123987123987',
-    googleFormUrl: 'https://forms.gle/c5CBb1P8KTmmD5pu5',
-    description: 'Direct screening for backend platform and transactional systems. High-throughput distributed systems.',
-    experienceRange: '2-5 years',
-  },
-  {
-    title: 'Senior Software Engineer & Systems Architect',
-    company: 'Enterprise Cloud Platform',
-    recruiterName: 'Karan Malhotra (Talent Acquisition Lead)',
-    postUrl: 'https://www.linkedin.com/posts/karanmalhotra_cloud-software-engineer-activity-7198234981273981723',
-    googleFormUrl: 'https://forms.gle/jqiSv7KGkLq93Ltb7',
-    description: 'Direct hiring for Senior Engineers and Platform Architects. Fast-track screening form for engineering managers.',
-    experienceRange: '3-8 years',
-  },
-  {
-    title: 'Cloud & DevOps Infrastructure Specialist (AWS / Terraform / Kubernetes)',
-    company: 'ScaleOps Technologies',
-    recruiterName: 'Aditi Sharma (Tech Recruiter)',
-    postUrl: 'https://www.linkedin.com/posts/aditisharma_devops-cloud-hiring-activity-7188920192834756123',
-    googleFormUrl: 'https://forms.gle/ETNec2n1qJundZsX6',
-    description: 'Hiring Site Reliability & Cloud Infrastructure engineers for multi-cloud Kubernetes environments.',
-    experienceRange: '2-6 years',
-  },
-  {
-    title: 'Product & Frontend Engineer (React / Next.js / TypeScript)',
-    company: 'Consumer Tech Lab',
-    recruiterName: 'Sneha Roy (Talent Acquisition Specialist)',
-    postUrl: 'https://www.linkedin.com/posts/sneharoy_frontend-hiring-activity-7182938475619283746',
-    googleFormUrl: 'https://forms.gle/QJNF7TXVBTgbLoaC7',
-    description: 'Direct team hiring for modern web and mobile-responsive products. Fast-track screening via Google Form.',
-    experienceRange: '1-5 years',
-  },
-];
-
 /**
  * Searches and extracts LinkedIn posts from Recruiters / Talent Acquisition (TA) who post job openings
  * with attached Google Forms (forms.gle or docs.google.com/forms).
@@ -841,8 +761,8 @@ export async function searchLinkedInRecruiterFormPosts(
         }
       }
 
-      // Filter out invalid/closed/restricted/broken forms
-      if (c.googleFormUrl && (formStatus === 'closed' || formStatus === 'broken' || formStatus === 'restricted')) {
+      // Strictly filter out any form that is not active & accepting responses
+      if (c.googleFormUrl && formStatus !== 'active') {
         continue;
       }
 
@@ -872,37 +792,224 @@ export async function searchLinkedInRecruiterFormPosts(
     console.warn('[Recruiter Post Extractor] Error querying posts:', err?.message || err);
   }
 
-  // Supplement with verified active recruiter posts if fewer than 5 found
-  if (jobs.length < 5) {
-    for (const item of VERIFIED_RECRUITER_FORM_POSTS) {
-      if (!seenPosts.has(item.postUrl)) {
-        seenPosts.add(item.postUrl);
+  recruiterFormCache.set(cacheKey, { timestamp: Date.now(), jobs });
+  console.log(`[Recruiter Post Extractor] Extracted ${jobs.length} recruiter posts with active Google Forms`);
+  return jobs;
+}
+
+/**
+ * Searches live tech jobs and challenges from Unstop (formerly Dare2Compete)
+ * Real-time API query filtered by active registration status
+ */
+export async function searchUnstopJobs(
+  keywordsOrParams: string | { keywords?: string; location?: string } = 'Software Engineer',
+  locationParam = 'India'
+): Promise<DiscoveredJob[]> {
+  const keywords = typeof keywordsOrParams === 'object' ? keywordsOrParams.keywords : keywordsOrParams;
+  const location = typeof keywordsOrParams === 'object' ? (keywordsOrParams.location || locationParam) : locationParam;
+  const cleanKeywords = (keywords || 'Software Engineer').trim();
+  const jobs: DiscoveredJob[] = [];
+
+  try {
+    const url = `https://unstop.com/api/public/opportunity/search-result?opportunity=jobs&searchTerm=${encodeURIComponent(cleanKeywords)}&status=open&page=1&per_page=25`;
+    const res = await fetchWithTimeout(
+      url,
+      {
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          Accept: 'application/json',
+        },
+      },
+      7000
+    );
+
+    if (!res.ok) return [];
+
+    const json = (await res.json()) as any;
+    const rawList: any[] = json?.data?.data || [];
+
+    for (const item of rawList) {
+      if (!item || !item.title) continue;
+
+      // Strictly filter out finished or ended opportunities
+      const regStatus = item.regnRequirements?.reg_status;
+      const remainDays = item.regnRequirements?.remain_days;
+      if (regStatus === 'FINISHED' || remainDays === 'Ended') {
+        continue;
+      }
+
+      const title = String(item.title).trim();
+      const company = String(item.organisation?.name || 'Company').trim();
+      const jobLoc =
+        item.locations?.[0]?.city ||
+        item.jobDetail?.locations?.[0] ||
+        (item.region === 'online' ? 'Remote' : 'India');
+      const applyUrl = item.seo_url || (item.public_url ? `https://unstop.com/${item.public_url}` : '');
+
+      const isRemote =
+        item.region === 'online' ||
+        item.jobDetail?.type === 'remote' ||
+        item.jobDetail?.type === 'hybrid' ||
+        jobLoc.toLowerCase().includes('remote');
+
+      const rawDetails = String(item.details || '')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      const skills = Array.isArray(item.required_skills)
+        ? item.required_skills.map((s: any) => String(s.skill || s.skill_name || '')).filter(Boolean)
+        : [];
+
+      const deadlineText = remainDays ? ` • ⏳ ${remainDays}` : '';
+
+      jobs.push({
+        id: `unstop-${item.id || uuidv4().substring(0, 8)}`,
+        title,
+        company,
+        location: jobLoc,
+        url: applyUrl,
+        description: `🚀 Direct Job Opportunity on Unstop: ${title} at ${company} (${jobLoc}${deadlineText}). ${rawDetails.slice(0, 400)}...`,
+        source: 'unstop',
+        visaSponsorship: false,
+        remote: isRemote,
+        postedTime: remainDays ? `${remainDays} on Unstop` : 'Active on Unstop',
+        experienceRange: '0-4 years',
+        matchScore: 86,
+        matchingSkills: skills,
+      });
+    }
+
+    console.log(`[Unstop Job Search] Discovered ${jobs.length} active opportunities for "${cleanKeywords}"`);
+  } catch (err: any) {
+    console.warn('[Unstop Job Search] Error querying Unstop API:', err?.message || err);
+  }
+
+  return jobs;
+}
+
+/**
+ * Searches direct company career portals (Lever, Greenhouse, Ashby, SmartRecruiters)
+ * for active tech postings with direct apply URLs.
+ */
+export async function searchCompanyCareerPortals(
+  keywordsOrParams: string | { keywords?: string; location?: string } = 'Software Engineer',
+  locationParam = 'Worldwide'
+): Promise<DiscoveredJob[]> {
+  const keywords = typeof keywordsOrParams === 'object' ? keywordsOrParams.keywords : keywordsOrParams;
+  const location = typeof keywordsOrParams === 'object' ? (keywordsOrParams.location || locationParam) : locationParam;
+  const cleanKeywords = (keywords || 'Software Engineer').trim();
+  const jobs: DiscoveredJob[] = [];
+  const seenUrls = new Set<string>();
+
+  try {
+    // Search publicly indexed ATS job boards (Lever, Greenhouse, Ashby)
+    const atsDomains = ['jobs.lever.co', 'boards.greenhouse.io', 'jobs.ashbyhq.com'];
+    const query = `(${atsDomains.map((d) => `site:${d}`).join(' OR ')}) "${cleanKeywords}"`;
+    const searchUrl = `https://search.brave.com/search?q=${encodeURIComponent(query).replace(/%20/g, '+')}`;
+    const html = await fetchWithCurl(searchUrl, 5000);
+
+    if (html && html.length > 500) {
+      const regex = /title:"([^"]+?)",url:"(https:\/\/(?:jobs\.lever\.co|boards\.greenhouse\.io|jobs\.ashbyhq\.com)\/[^"]+)"(?:,full_title:[^,]+)?,description:"([^"]*)"/gi;
+      let m: RegExpExecArray | null;
+
+      while ((m = regex.exec(html)) !== null) {
+        const rawTitle = m[1]
+          .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+          .trim();
+        const url = m[2].split('?')[0];
+        const rawDesc = m[3]
+          .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+          .replace(/<[^>]+>/g, ' ')
+          .trim();
+
+        if (seenUrls.has(url)) continue;
+        seenUrls.add(url);
+
+        let company = 'Tech Company';
+        try {
+          const parsedUrl = new URL(url);
+          const segments = parsedUrl.pathname.split('/').filter(Boolean);
+          if (segments[0]) {
+            company = segments[0].replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+          }
+        } catch (_) {}
+
+        const isRemote =
+          rawTitle.toLowerCase().includes('remote') ||
+          rawDesc.toLowerCase().includes('remote') ||
+          location.toLowerCase().includes('remote');
+
         jobs.push({
-          id: `rec-form-${uuidv4().substring(0, 8)}`,
-          title: item.title,
-          company: item.company,
-          location: 'Remote / Hybrid Direct Recruiter',
-          url: item.postUrl,
-          googleFormUrl: item.googleFormUrl,
-          googleFormStatus: 'active',
-          googleFormStatusReason: 'Verified active application form',
-          recruiterName: item.recruiterName,
-          description: `📝 Recruiter Post by ${item.recruiterName}: ${item.description}`,
-          source: 'google_form',
-          visaSponsorship: false,
-          remote: true,
-          postedTime: 'Active Recruiter Post',
-          experienceRange: item.experienceRange,
-          matchScore: 92,
+          id: `portal-${uuidv4().substring(0, 8)}`,
+          title: rawTitle,
+          company,
+          location: isRemote ? 'Remote' : (location || 'Worldwide'),
+          url,
+          description: `🌐 Direct ATS Career Portal: ${rawTitle} at ${company}. Direct Apply Link: ${url}. ${rawDesc.slice(0, 300)}...`,
+          source: 'portal',
+          visaSponsorship: rawDesc.toLowerCase().includes('visa') || rawDesc.toLowerCase().includes('relocation'),
+          remote: isRemote,
+          postedTime: 'Active ATS Listing',
+          experienceRange: '2-5 years',
+          matchScore: 84,
           matchingSkills: [],
         });
+
+        if (jobs.length >= 20) break;
       }
+    }
+  } catch (err: any) {
+    console.warn('[Company Career Portals] Error searching portals:', err?.message || err);
+  }
+
+  return jobs;
+}
+
+/**
+ * Expands candidate profile into multiple intelligent search queries (roles, stack pairs, level)
+ */
+export function expandSearchTaxonomy(
+  profile: UserProfile | null,
+  explicitKeywords?: string
+): string[] {
+  const queries = new Set<string>();
+
+  if (explicitKeywords && explicitKeywords.trim()) {
+    queries.add(explicitKeywords.trim());
+  }
+
+  if (profile) {
+    // 1. Target roles
+    if (profile.targetRoles && profile.targetRoles.length > 0) {
+      for (const role of profile.targetRoles.slice(0, 3)) {
+        if (role && role.trim()) queries.add(role.trim());
+      }
+    }
+
+    // 2. Headline clean title
+    if (profile.headline && profile.headline.trim()) {
+      const cleanHeadline = profile.headline.split(/[|•–-]/)[0].trim();
+      if (cleanHeadline.length > 3) queries.add(cleanHeadline);
+    }
+
+    // 3. Tech Stack Pairs (e.g. "React Node", "Python Django")
+    if (profile.techStack && profile.techStack.length >= 2) {
+      queries.add(profile.techStack.slice(0, 2).join(' '));
+    }
+
+    // 4. Primary Field
+    if (profile.field && profile.field.trim()) {
+      queries.add(profile.field.trim());
     }
   }
 
-  recruiterFormCache.set(cacheKey, { timestamp: Date.now(), jobs });
-  console.log(`[Recruiter Post Extractor] Extracted ${jobs.length} recruiter posts with Google Forms`);
-  return jobs;
+  if (queries.size === 0) {
+    queries.add('Software Engineer');
+  }
+
+  return Array.from(queries).slice(0, 4);
 }
 
 /**
@@ -1605,18 +1712,15 @@ export async function discoverWorldwideJobs(
   profile: UserProfile | null,
   filters: JobSearchFilters = {}
 ): Promise<DiscoveredJob[]> {
-  const effectiveKeywords =
-    filters.keywords ||
-    profile?.targetRoles?.[0] ||
-    profile?.headline ||
-    (profile?.techStack && profile.techStack.length > 0 ? profile.techStack.slice(0, 3).join(' ') : 'Software Engineer');
+  const expandedQueries = expandSearchTaxonomy(profile, filters.keywords);
+  const effectiveKeywords = expandedQueries[0] || 'Software Engineer';
 
   const effectiveLocation = filters.countryCity || 'Worldwide';
   const remoteOnly = filters.remoteOnly || false;
   const visaOnly = filters.visaSponsorshipOnly || false;
 
   console.log(
-    `[Job Discovery] Multi-source worldwide scan: keywords="${effectiveKeywords}", location="${effectiveLocation}", visaOnly=${visaOnly}, remoteOnly=${remoteOnly}, source=${filters.source || 'all'}`
+    `[Job Discovery] Multi-source worldwide scan: keywords="${effectiveKeywords}" (expanded: ${expandedQueries.join(', ')}), location="${effectiveLocation}", visaOnly=${visaOnly}, remoteOnly=${remoteOnly}, source=${filters.source || 'all'}`
   );
 
   const fetchers: Promise<DiscoveredJob[]>[] = [];
@@ -1643,7 +1747,7 @@ export async function discoverWorldwideJobs(
     );
   }
 
-  // 1c. LinkedIn Recruiter / TA Personal Posts with Attached Google Forms
+  // 1c. LinkedIn Recruiter / TA Personal Posts with Active Attached Google Forms
   if (
     filters.recruiterFormsOnly ||
     filters.source === 'google_form' ||
@@ -1651,6 +1755,18 @@ export async function discoverWorldwideJobs(
     !filters.source
   ) {
     fetchers.push(searchLinkedInRecruiterFormPosts(effectiveKeywords, effectiveLocation));
+  }
+
+  // 1d. Unstop Live Opportunities (India & Remote) - Direct Apply URLs & Challenges
+  if (!filters.recruiterFormsOnly && (!filters.source || filters.source === 'all' || filters.source === 'unstop')) {
+    for (const q of expandedQueries.slice(0, 2)) {
+      fetchers.push(searchUnstopJobs(q, effectiveLocation));
+    }
+  }
+
+  // 1e. Direct ATS Company Career Portals (Lever, Greenhouse, Ashby)
+  if (!filters.recruiterFormsOnly && (!filters.source || filters.source === 'all' || filters.source === 'portal')) {
+    fetchers.push(searchCompanyCareerPortals(effectiveKeywords, effectiveLocation));
   }
 
   // 2. Arbeitnow (multi-page, supports explicit visa sponsorship)
@@ -1707,18 +1823,21 @@ export async function discoverWorldwideJobs(
     }
   }
 
-  // Filter for Recruiter Google Forms only if requested
+  // Filter for Recruiter Google Forms only if requested - STRICTLY active only
   if (filters.recruiterFormsOnly) {
     allJobs = allJobs.filter(
-      (job) => Boolean(job.googleFormUrl) && job.googleFormStatus !== 'closed' && job.googleFormStatus !== 'broken'
+      (job) => Boolean(job.googleFormUrl) && job.googleFormStatus === 'active'
     );
   } else if (filters.source === 'google_form') {
     allJobs = allJobs.filter(
       (job) =>
         (Boolean(job.googleFormUrl) || job.source === 'google_form') &&
-        job.googleFormStatus !== 'closed' &&
-        job.googleFormStatus !== 'broken'
+        job.googleFormStatus === 'active'
     );
+  } else if (filters.source === 'unstop') {
+    allJobs = allJobs.filter((job) => job.source === 'unstop');
+  } else if (filters.source === 'portal') {
+    allJobs = allJobs.filter((job) => job.source === 'portal');
   }
 
   // Filter for LinkedIn Company postings only if requested

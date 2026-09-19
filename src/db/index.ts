@@ -41,7 +41,7 @@ export interface JobListing {
   url?: string;
   description: string;
   status: 'saved' | 'analyzed' | 'contact_found' | 'outreach_sent' | 'followup_sent' | 'replied' | 'interview' | 'rejected';
-  source?: 'linkedin' | 'linkedin_company' | 'arbeitnow' | 'remotive' | 'remoteok' | 'jobicy' | 'weworkremotely' | 'hn_hiring' | 'himalayas' | 'workingnomads' | 'euremotejobs' | 'google_form' | 'portal' | 'manual';
+  source?: 'linkedin' | 'linkedin_company' | 'unstop' | 'arbeitnow' | 'remotive' | 'remoteok' | 'jobicy' | 'weworkremotely' | 'hn_hiring' | 'himalayas' | 'workingnomads' | 'euremotejobs' | 'google_form' | 'portal' | 'manual';
   visaSponsorship?: boolean;
   remote?: boolean;
   applyUrl?: string;
@@ -67,14 +67,15 @@ export interface ReferralContact {
   name: string;
   role: string;
   email?: string;
+  phone?: string;
   secondaryEmail?: string;
-  emailType?: 'official' | 'personal' | 'pattern_generated' | 'verified_inbox' | 'job_post';
+  emailType?: 'official' | 'personal' | 'pattern_generated' | 'verified_inbox' | 'job_post' | 'easyleadz';
   domain?: string;
   verified?: boolean;
   deliveryRisk?: 'safe' | 'unverified';
   linkedinUrl?: string;
   githubUrl?: string;
-  apolloUrl?: string;
+  easyleadzEnriched?: boolean;
   contactType: 'peer' | 'manager' | 'recruiter';
   status: 'uncontacted' | 'emailed' | 'linkedin_connected' | 'replied';
   createdAt: string;
@@ -115,8 +116,8 @@ export interface AppSettings {
   targetLocation?: string;
   autoAttachResume: boolean;
   defaultFollowUpDays: number;
-  apolloApiKey?: string;
   hunterApiKey?: string;
+  easyleadzApiKey?: string;
   githubToken?: string;
 }
 

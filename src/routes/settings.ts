@@ -17,14 +17,14 @@ router.get('/', (_req: Request, res: Response) => {
         ? '••••••••••••••••'
         : '',
       hasAppPassword: Boolean(settings.gmailAppPassword),
-      apolloApiKey: settings.apolloApiKey
-        ? '••••••••••••••••'
-        : '',
-      hasApolloKey: Boolean(settings.apolloApiKey),
       hunterApiKey: settings.hunterApiKey
         ? '••••••••••••••••'
         : '',
       hasHunterKey: Boolean(settings.hunterApiKey),
+      easyleadzApiKey: settings.easyleadzApiKey
+        ? '••••••••••••••••'
+        : '',
+      hasEasyleadzKey: Boolean(settings.easyleadzApiKey || config.easyleadzApiKey),
     },
     system: {
       geminiKeyConfigured: Boolean(config.geminiApiKey),
@@ -45,8 +45,8 @@ router.post('/', (req: Request, res: Response) => {
     targetLocation,
     autoAttachResume,
     defaultFollowUpDays,
-    apolloApiKey,
     hunterApiKey,
+    easyleadzApiKey,
   } = req.body;
 
   let newAppPassword = current.gmailAppPassword;
@@ -55,15 +55,6 @@ router.post('/', (req: Request, res: Response) => {
       newAppPassword = '';
     } else if (!gmailAppPassword.includes('•••')) {
       newAppPassword = gmailAppPassword.trim();
-    }
-  }
-
-  let newApolloKey = current.apolloApiKey;
-  if (apolloApiKey !== undefined) {
-    if (apolloApiKey === '') {
-      newApolloKey = '';
-    } else if (!apolloApiKey.includes('•••')) {
-      newApolloKey = apolloApiKey.trim();
     }
   }
 
@@ -76,6 +67,15 @@ router.post('/', (req: Request, res: Response) => {
     }
   }
 
+  let newEasyleadzKey = current.easyleadzApiKey;
+  if (easyleadzApiKey !== undefined) {
+    if (easyleadzApiKey === '') {
+      newEasyleadzKey = '';
+    } else if (!easyleadzApiKey.includes('•••')) {
+      newEasyleadzKey = easyleadzApiKey.trim();
+    }
+  }
+
   const updated = db.saveSettings({
     gmailAddress: gmailAddress !== undefined ? gmailAddress.trim() : current.gmailAddress,
     gmailAppPassword: newAppPassword,
@@ -85,8 +85,8 @@ router.post('/', (req: Request, res: Response) => {
       autoAttachResume !== undefined ? Boolean(autoAttachResume) : current.autoAttachResume,
     defaultFollowUpDays:
       defaultFollowUpDays !== undefined ? parseInt(defaultFollowUpDays, 10) : current.defaultFollowUpDays,
-    apolloApiKey: newApolloKey,
     hunterApiKey: newHunterKey,
+    easyleadzApiKey: newEasyleadzKey,
   });
 
   res.json({
@@ -96,10 +96,10 @@ router.post('/', (req: Request, res: Response) => {
       ...updated,
       gmailAppPassword: updated.gmailAppPassword ? '••••••••••••••••' : '',
       hasAppPassword: Boolean(updated.gmailAppPassword),
-      apolloApiKey: updated.apolloApiKey ? '••••••••••••••••' : '',
-      hasApolloKey: Boolean(updated.apolloApiKey),
       hunterApiKey: updated.hunterApiKey ? '••••••••••••••••' : '',
       hasHunterKey: Boolean(updated.hunterApiKey),
+      easyleadzApiKey: updated.easyleadzApiKey ? '••••••••••••••••' : '',
+      hasEasyleadzKey: Boolean(updated.easyleadzApiKey || config.easyleadzApiKey),
     },
   });
 });

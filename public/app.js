@@ -163,6 +163,9 @@ function initEventListeners() {
   // Gmail Settings Form
   document.getElementById('gmail-settings-form')?.addEventListener('submit', handleSaveSettings);
   document.getElementById('btn-test-email')?.addEventListener('click', handleTestGmailConnection);
+
+  // Edit Contact Form
+  document.getElementById('edit-contact-form')?.addEventListener('submit', handleSaveEditedContact);
 }
 
 // ─── Data Loaders ───────────────────────────────────────────────────
@@ -266,21 +269,6 @@ async function loadSettings() {
       if (autoAttEl) autoAttEl.checked = data.settings.autoAttachResume !== false;
       if (fupEl) fupEl.value = data.settings.defaultFollowUpDays || 3;
 
-      const apolloEl = document.getElementById('setting-apollo-api-key');
-      const apolloBadge = document.getElementById('badge-apollo-status');
-      if (apolloEl) apolloEl.value = data.settings.apolloApiKey || '';
-      if (apolloBadge) {
-        if (data.settings.hasApolloKey) {
-          apolloBadge.textContent = 'Active ✅';
-          apolloBadge.style.background = 'rgba(16,185,129,0.15)';
-          apolloBadge.style.color = '#10b981';
-        } else {
-          apolloBadge.textContent = 'Not Configured';
-          apolloBadge.style.background = 'rgba(245,158,11,0.15)';
-          apolloBadge.style.color = '#f59e0b';
-        }
-      }
-
       const hunterEl = document.getElementById('setting-hunter-api-key');
       const hunterBadge = document.getElementById('badge-hunter-status');
       if (hunterEl) hunterEl.value = data.settings.hunterApiKey || '';
@@ -293,6 +281,21 @@ async function loadSettings() {
           hunterBadge.textContent = 'Not Configured';
           hunterBadge.style.background = 'rgba(245,158,11,0.15)';
           hunterBadge.style.color = '#f59e0b';
+        }
+      }
+
+      const easyleadzEl = document.getElementById('setting-easyleadz-api-key');
+      const easyleadzBadge = document.getElementById('badge-easyleadz-status');
+      if (easyleadzEl) easyleadzEl.value = data.settings.easyleadzApiKey || '';
+      if (easyleadzBadge) {
+        if (data.settings.hasEasyLeadzKey) {
+          easyleadzBadge.textContent = 'Active ✅';
+          easyleadzBadge.style.background = 'rgba(16,185,129,0.15)';
+          easyleadzBadge.style.color = '#10b981';
+        } else {
+          easyleadzBadge.textContent = 'Not Configured';
+          easyleadzBadge.style.background = 'rgba(245,158,11,0.15)';
+          easyleadzBadge.style.color = '#f59e0b';
         }
       }
 
@@ -426,6 +429,8 @@ function renderDiscoveredJobs(jobs) {
     linkedin: '💼 LinkedIn Live',
     linkedin_company: '🏢 LinkedIn Official Company',
     google_form: '📝 Recruiter Post (Google Form)',
+    unstop: '🎓 Unstop Jobs',
+    portal: '🏢 Career Portal',
     arbeitnow: '🌍 Arbeitnow (Visa)',
     himalayas: '🏔️ Himalayas',
     weworkremotely: '💻 WeWorkRemotely',
@@ -435,7 +440,6 @@ function renderDiscoveredJobs(jobs) {
     hn_hiring: '⚡ Hacker News',
     euremotejobs: '🇪🇺 EuRemoteJobs',
     remotive: '🎯 Remotive',
-    portal: '🏢 Portal',
   };
 
   grid.innerHTML = jobs.map((job) => {
@@ -511,6 +515,13 @@ function renderDiscoveredJobs(jobs) {
             ➕ Add to Pipeline & Find Contacts
           </button>
           ${formActionButton}
+          ${
+            job.applyUrl && job.applyUrl !== job.url && !hasForm
+              ? `<a href="${job.applyUrl}" target="_blank" rel="noopener" class="btn btn-sm" style="background: rgba(99,102,241,0.15); color: #818cf8; border: 1px solid rgba(99,102,241,0.4); font-weight: 600; text-decoration: none;">
+                  🚀 Direct Apply
+                </a>`
+              : ''
+          }
           ${
             job.url
               ? `<a href="${job.url}" target="_blank" rel="noopener" class="btn btn-sm btn-outline">
@@ -650,16 +661,13 @@ function renderDiscoveredDecisionMakers(contacts, domain) {
 
   box.classList.remove('hidden');
 
-  const apolloBtn = document.getElementById('btn-apollo-company-link');
-  if (apolloBtn && state.selectedJob?.company) {
-    apolloBtn.href = `https://app.apollo.io/#/people?findOrganizations%5B%5D=${encodeURIComponent(state.selectedJob.company)}`;
-  }
-
   grid.innerHTML = contacts.map((c) => {
     const isSafe = c.deliveryRisk === 'safe' || c.confidence === 'verified_corporate' || c.confidence === 'job_post_extracted' || c.confidence === 'pattern_confirmed';
     
     let badge = '';
-    if (c.source === 'github_events') {
+    if (c.easyleadzEnriched || c.source === 'easyleadz') {
+      badge = '<span class="dm-mx-badge" style="background: rgba(236,72,153,0.15); color: #f472b6; border: 1px solid rgba(236,72,153,0.35);" title="Revealed & verified via EasyLeadz / Mr. E">⚡ EasyLeadz / Mr. E</span>';
+    } else if (c.source === 'github_events') {
       badge = '<span class="dm-mx-badge" style="background: rgba(16,185,129,0.15); color: #10b981; border: 1px solid rgba(16,185,129,0.3);" title="Real engineer personal or corporate email verified from active public GitHub activity">✓ GitHub Activity</span>';
     } else if (c.source === 'github_org') {
       badge = '<span class="dm-mx-badge" style="background: rgba(16,185,129,0.15); color: #10b981; border: 1px solid rgba(16,185,129,0.3);" title="Real active engineer corporate email verified from public GitHub organization">✓ Verified Dev Email</span>';
@@ -678,9 +686,6 @@ function renderDiscoveredDecisionMakers(contacts, domain) {
     const githubLink = c.githubUrl
       ? `<a href="${c.githubUrl}" target="_blank" rel="noopener" class="btn btn-xs btn-outline" style="color: #60a5fa; border-color: rgba(96,165,250,0.35);">🐙 GitHub</a>`
       : '';
-    const apolloLink = c.apolloUrl
-      ? `<a href="${c.apolloUrl}" target="_blank" rel="noopener" class="btn btn-xs btn-outline" style="color: #fbbf24; border-color: rgba(251,191,36,0.35);">⚡ Apollo</a>`
-      : '';
     const linkedinLink = c.linkedinUrl
       ? `<a href="${c.linkedinUrl}" target="_blank" rel="noopener" class="btn btn-xs btn-outline">🔗 LinkedIn</a>`
       : '';
@@ -695,8 +700,11 @@ function renderDiscoveredDecisionMakers(contacts, domain) {
           <span class="dm-priority-tag">${escapeHtml(c.priorityLabel || 'Hiring Channel')}</span>
         </div>
 
-        <div class="dm-email-row mt-1 flex-between">
-          <span class="dm-email-official font-mono text-sm">✉️ ${escapeHtml(c.officialEmail)}</span>
+        <div class="dm-email-row mt-1 flex-between flex-wrap gap-1">
+          <div>
+            <span class="dm-email-official font-mono text-sm">✉️ ${escapeHtml(c.officialEmail)}</span>
+            ${c.phone ? `<span class="font-mono text-xs" style="color: #6ee7b7; margin-left: 8px;">📞 ${escapeHtml(c.phone)}</span>` : ''}
+          </div>
           ${badge}
         </div>
 
@@ -704,7 +712,6 @@ function renderDiscoveredDecisionMakers(contacts, domain) {
           ${c.secondaryEmail ? `<span class="text-xs text-muted font-mono">Alt: ${escapeHtml(c.secondaryEmail)}</span>` : '<span></span>'}
           <div class="btn-group">
             ${githubLink}
-            ${apolloLink}
             ${linkedinLink}
           </div>
         </div>
@@ -1112,9 +1119,6 @@ async function openJobDetailsModal(jobId) {
     const btnBrave = document.getElementById('btn-dork-brave');
     if (btnBrave) btnBrave.href = `https://search.brave.com/search?q=${encodeURIComponent(dorkQuery)}`;
 
-    const btnApollo = document.getElementById('btn-dork-apollo');
-    if (btnApollo) btnApollo.href = `https://app.apollo.io/#/people?findOrganizations%5B%5D=${encodeURIComponent(company)}`;
-
     document.getElementById('modal-job-details').classList.remove('hidden');
   } catch (err) {
     showToast('Failed to load job details', 'error');
@@ -1177,7 +1181,9 @@ function renderModalContacts() {
   container.innerHTML = state.currentContacts.map((c) => {
     const isSafe = c.deliveryRisk === 'safe' || c.emailType === 'verified_inbox' || c.emailType === 'job_post' || c.verified;
     let badge = '';
-    if (c.emailType === 'job_post') {
+    if (c.easyleadzEnriched || c.emailType === 'easyleadz') {
+      badge = '<span class="badge" style="background: rgba(236,72,153,0.15); color: #f472b6; font-size: 11px;">⚡ EasyLeadz / Mr. E Verified</span>';
+    } else if (c.emailType === 'job_post') {
       badge = '<span class="badge" style="background: rgba(139,92,246,0.15); color: #a78bfa; font-size: 11px;">🎯 Job Post Recruiter</span>';
     } else if (c.emailType === 'verified_inbox' || c.verified) {
       badge = '<span class="badge" style="background: rgba(16,185,129,0.15); color: #10b981; font-size: 11px;">✓ Verified Work Email</span>';
@@ -1194,7 +1200,7 @@ function renderModalContacts() {
     return `
       <div class="contact-card-item">
         <div>
-          <div class="flex-align gap-2">
+          <div class="flex-align gap-2 flex-wrap">
             <strong>${escapeHtml(c.name)}</strong>
             ${badge}
             ${emailedBadge}
@@ -1202,11 +1208,19 @@ function renderModalContacts() {
           <span class="text-muted text-xs"> — ${escapeHtml(c.role)} (${c.contactType})</span>
           <div class="text-xs font-mono text-muted mt-1">
             ${escapeHtml(c.email || 'No email')}
+            ${c.phone ? `• <span style="color: #6ee7b7;">📞 ${escapeHtml(c.phone)}</span>` : ''}
             ${c.linkedinUrl ? `• <a href="${c.linkedinUrl}" target="_blank" class="link-btn text-xs">🔗 LinkedIn</a>` : ''}
-            ${c.apolloUrl ? `• <a href="${c.apolloUrl}" target="_blank" class="link-btn text-xs" style="color: #fbbf24;">⚡ Apollo</a>` : ''}
           </div>
         </div>
-        <div class="btn-group">
+        <div class="btn-group flex-wrap">
+          ${
+            c.linkedinUrl && !c.easyleadzEnriched
+              ? `<button class="btn btn-xs btn-outline" style="border-color: rgba(236,72,153,0.4); color: #f472b6;" onclick="handleEnrichContactEasyLeadz('${c.id}')" title="Call EasyLeadz API to reveal email & phone for this LinkedIn profile">
+                  ⚡ Reveal (Mr. E)
+                </button>`
+              : ''
+          }
+          <button class="btn btn-xs btn-outline" onclick="openEditContactModal('${c.id}')" title="Edit email or phone discovered via Mr. E extension">✏️ Edit</button>
           <button class="btn btn-xs btn-primary" onclick="openOutreachStudioWithContact('${c.id}')">Draft Outreach</button>
         </div>
       </div>
@@ -1963,8 +1977,8 @@ async function handleSaveSettings(e) {
   const senderName = document.getElementById('setting-sender-name').value;
   const autoAttachResume = document.getElementById('setting-auto-attach-resume').checked;
   const defaultFollowUpDays = document.getElementById('setting-followup-days').value;
-  const apolloApiKey = document.getElementById('setting-apollo-api-key')?.value;
   const hunterApiKey = document.getElementById('setting-hunter-api-key')?.value;
+  const easyleadzApiKey = document.getElementById('setting-easyleadz-api-key')?.value;
 
   try {
     const res = await fetch('/api/settings', {
@@ -1976,8 +1990,8 @@ async function handleSaveSettings(e) {
         senderName,
         autoAttachResume,
         defaultFollowUpDays,
-        apolloApiKey,
         hunterApiKey,
+        easyleadzApiKey,
       }),
     });
 
@@ -2069,10 +2083,12 @@ function toggleQuickAddDorkForm() {
 async function handleQuickAddDorkContact() {
   const nameInput = document.getElementById('quick-dork-name');
   const roleInput = document.getElementById('quick-dork-role');
+  const emailInput = document.getElementById('quick-dork-email');
   const linkedinInput = document.getElementById('quick-dork-linkedin');
 
   const name = nameInput?.value?.trim();
   const role = roleInput?.value?.trim() || 'Engineering / Talent Lead';
+  const directEmail = emailInput?.value?.trim();
   const linkedinUrl = linkedinInput?.value?.trim() || '';
 
   if (!name) {
@@ -2085,7 +2101,7 @@ async function handleQuickAddDorkContact() {
   const nameParts = name.toLowerCase().replace(/[^a-z\s]/g, '').trim().split(/\s+/);
   const first = nameParts[0] || 'contact';
   const last = nameParts.length > 1 ? nameParts[nameParts.length - 1] : '';
-  const email = last ? `${first}.${last}@${domain}` : `${first}@${domain}`;
+  const email = directEmail || (last ? `${first}.${last}@${domain}` : `${first}@${domain}`);
 
   let contactType = 'peer';
   const roleLower = role.toLowerCase();
@@ -2115,6 +2131,7 @@ async function handleQuickAddDorkContact() {
       showToast(`Added ${name} (${email}) to your referral roster!`, 'success');
       if (nameInput) nameInput.value = '';
       if (roleInput) roleInput.value = '';
+      if (emailInput) emailInput.value = '';
       if (linkedinInput) linkedinInput.value = '';
       if (state.selectedJobId) {
         await openJobDetailsModal(state.selectedJobId);
@@ -2125,6 +2142,113 @@ async function handleQuickAddDorkContact() {
     }
   } catch (err) {
     showToast('Network error adding contact', 'error');
+  }
+}
+
+// ─── EasyLeadz / Mr. E Contact Enrichment & Edit ───────────────────
+async function handleEnrichContactEasyLeadz(contactId) {
+  const contact = state.currentContacts.find((c) => c.id === contactId);
+  if (!contact) return;
+
+  if (!contact.linkedinUrl) {
+    showToast('Contact has no LinkedIn URL to query EasyLeadz / Mr. E', 'warning');
+    return;
+  }
+
+  showToast(`Querying EasyLeadz / Mr. E API for ${contact.name}...`, 'info');
+
+  try {
+    const res = await fetch('/api/contacts/enrich-easyleadz', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contactId,
+        linkedinUrl: contact.linkedinUrl,
+        name: contact.name,
+        company: contact.company,
+      }),
+    });
+
+    const data = await res.json();
+    if (data.success && data.enrichment) {
+      const email = data.enrichment.email;
+      const phone = data.enrichment.phone;
+      showToast(`🎉 Revealed! ${email ? `Email: ${email}` : ''}${phone ? ` • Phone: ${phone}` : ''}`, 'success');
+      if (state.selectedJobId) {
+        await openJobDetailsModal(state.selectedJobId);
+      }
+    } else {
+      showToast(data.error || 'Could not find contact details via EasyLeadz API', 'warning');
+    }
+  } catch (err) {
+    showToast('Network error calling EasyLeadz enrichment', 'error');
+  }
+}
+
+function openEditContactModal(contactId) {
+  const contact = state.currentContacts.find((c) => c.id === contactId);
+  if (!contact) return;
+
+  const idEl = document.getElementById('edit-contact-id');
+  const nameEl = document.getElementById('edit-contact-name');
+  const roleEl = document.getElementById('edit-contact-role');
+  const emailEl = document.getElementById('edit-contact-email');
+  const phoneEl = document.getElementById('edit-contact-phone');
+  const linkedinEl = document.getElementById('edit-contact-linkedin');
+
+  if (idEl) idEl.value = contact.id;
+  if (nameEl) nameEl.value = contact.name || '';
+  if (roleEl) roleEl.value = contact.role || '';
+  if (emailEl) emailEl.value = contact.email || '';
+  if (phoneEl) phoneEl.value = contact.phone || '';
+  if (linkedinEl) linkedinEl.value = contact.linkedinUrl || '';
+
+  document.getElementById('modal-edit-contact')?.classList.remove('hidden');
+}
+
+function closeEditContactModal() {
+  document.getElementById('modal-edit-contact')?.classList.add('hidden');
+}
+
+async function handleSaveEditedContact(e) {
+  e.preventDefault();
+  const contactId = document.getElementById('edit-contact-id')?.value;
+  if (!contactId) return;
+
+  const name = document.getElementById('edit-contact-name')?.value?.trim();
+  const role = document.getElementById('edit-contact-role')?.value?.trim();
+  const email = document.getElementById('edit-contact-email')?.value?.trim();
+  const phone = document.getElementById('edit-contact-phone')?.value?.trim();
+  const linkedinUrl = document.getElementById('edit-contact-linkedin')?.value?.trim();
+
+  try {
+    const res = await fetch(`/api/contacts/${contactId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name,
+        role,
+        email,
+        phone,
+        linkedinUrl,
+        verified: Boolean(email && email.includes('@')),
+        deliveryRisk: email && email.includes('@') ? 'safe' : 'unverified',
+        easyleadzEnriched: true,
+      }),
+    });
+
+    const data = await res.json();
+    if (data.success) {
+      showToast('Contact details saved!', 'success');
+      closeEditContactModal();
+      if (state.selectedJobId) {
+        await openJobDetailsModal(state.selectedJobId);
+      }
+    } else {
+      showToast(data.error || 'Failed to update contact', 'error');
+    }
+  } catch (err) {
+    showToast('Network error updating contact', 'error');
   }
 }
 
@@ -2147,6 +2271,9 @@ window.openJobDetailsModal = openJobDetailsModal;
 window.closeJobDetailsModal = closeJobDetailsModal;
 window.openAddContactSubModal = openAddContactSubModal;
 window.closeAddContactSubModal = closeAddContactSubModal;
+window.openEditContactModal = openEditContactModal;
+window.closeEditContactModal = closeEditContactModal;
+window.handleEnrichContactEasyLeadz = handleEnrichContactEasyLeadz;
 window.openOutreachStudioModal = openOutreachStudioModal;
 window.closeOutreachStudioModal = closeOutreachStudioModal;
 window.openOutreachStudioWithContact = openOutreachStudioWithContact;
