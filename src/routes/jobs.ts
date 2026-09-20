@@ -281,7 +281,9 @@ router.post('/run-agent', async (req: Request, res: Response) => {
           c.email &&
           c.email.includes('@') &&
           !c.email.includes('example.com') &&
-          !isJobBoardDomain(c.email)
+          !isJobBoardDomain(c.email) &&
+          // Do not send automated developer cold outreach to Fortune 500 / mega-cap CEOs
+          !((c.role || '').toLowerCase().includes('chief executive') || (c.role || '').toLowerCase() === 'ceo')
       );
 
       // Sort deliverable contacts so that Recruiters are Priority #1, followed by Managers, followed by Peers

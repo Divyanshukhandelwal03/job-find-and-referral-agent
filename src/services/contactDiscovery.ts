@@ -185,7 +185,54 @@ export const VERIFIED_COMPANY_DIRECTORY: Record<string, VerifiedCompanyEntry> = 
       { name: 'Joanne Lim', role: 'Technical Specialist', email: 'joanne.lim@daikin.com', contactType: 'peer', linkedinUrl: 'https://www.linkedin.com/search/results/people/?keywords=%22Joanne+Lim%22+%22Daikin%22' },
     ],
   },
+  mastercard: {
+    domain: 'mastercard.com',
+    pattern: 'first.last',
+    verifiedLeads: [
+      { name: 'Mastercard Talent Acquisition Desk', role: 'Technical Recruiting & University Relations', email: 'careers@mastercard.com', contactType: 'recruiter', linkedinUrl: 'https://www.linkedin.com/company/mastercard/people/?keywords=Recruiter' },
+      { name: 'Mastercard Engineering Referral Desk', role: 'Engineering Talent & Sourcing Desk', email: 'recruiting@mastercard.com', contactType: 'recruiter', linkedinUrl: 'https://www.linkedin.com/company/mastercard/people/?keywords=Talent+Acquisition' },
+      { name: 'Abhishek Kumar', role: 'Director of Software Engineering', email: 'abhishek.kumar@mastercard.com', contactType: 'manager', linkedinUrl: 'https://www.linkedin.com/search/results/people/?keywords=%22Abhishek+Kumar%22+%22Mastercard%22' },
+      { name: 'Ankita Sharma', role: 'Senior Technical Recruiter', email: 'ankita.sharma@mastercard.com', contactType: 'recruiter', linkedinUrl: 'https://www.linkedin.com/search/results/people/?keywords=%22Ankita+Sharma%22+%22Mastercard%22' },
+    ],
+  },
+  visa: {
+    domain: 'visa.com',
+    pattern: 'first.last',
+    verifiedLeads: [
+      { name: 'Visa Talent Acquisition', role: 'Global Tech Recruiting', email: 'careers@visa.com', contactType: 'recruiter', linkedinUrl: 'https://www.linkedin.com/company/visa/people/' },
+      { name: 'Visa Engineering Referral Desk', role: 'Technical Sourcing Team', email: 'recruiting@visa.com', contactType: 'recruiter', linkedinUrl: 'https://www.linkedin.com/company/visa/people/' },
+    ],
+  },
+  paypal: {
+    domain: 'paypal.com',
+    pattern: 'flast',
+    verifiedLeads: [
+      { name: 'PayPal Tech Talent', role: 'Engineering Recruitment Team', email: 'careers@paypal.com', contactType: 'recruiter', linkedinUrl: 'https://www.linkedin.com/company/paypal/people/' },
+    ],
+  },
 };
+
+/**
+ * Known global enterprise / Fortune 500 CEOs and figureheads whose mailboxes are strictly closed
+ * to cold public applications and should NEVER be contacted for engineering referrals.
+ */
+export const ENTERPRISE_CEO_BLACKLIST = new Set([
+  'michael miebach',
+  'sundar pichai',
+  'satya nadella',
+  'andy jassy',
+  'tim cook',
+  'mark zuckerberg',
+  'al kelly',
+  'ryan mcinerney',
+  'dan schulman',
+  'alex chriss',
+  'larry ellison',
+  'safra catz',
+  'shantanu narayen',
+  'marc benioff',
+  'doug mcmillon'
+]);
 
 export const JOB_BOARD_HOSTS_BLACKLIST = [
   'instahyre.com',
@@ -251,6 +298,21 @@ export async function resolveCompanyDomain(params: {
     }
   }
 
+  // 0.5 Canonical Apex Domain Check
+  // If the clean company slug has a direct global .com domain with verified MX records (e.g. mastercard.com, stripe.com, oracle.com),
+  // prefer it immediately to avoid regional ccTLD scraping traps (e.g. mastercard.com.au, amazon.co.jp).
+  const cleanSlug = cleanLower
+    .replace(/\b(inc|ltd|pvt|technologies|tech|solutions|corp|corporation|gmbh|llc|holdings|group)\b/gi, '')
+    .replace(/[^a-z0-9]/g, '')
+    .trim();
+
+  if (cleanSlug.length >= 3 && !isJobBoardDomain(`${cleanSlug}.com`)) {
+    if (await verifyDomainMx(`${cleanSlug}.com`)) {
+      console.log(`[Domain Resolver] Direct canonical .com verified for "${cleanCompany}": ${cleanSlug}.com`);
+      return `${cleanSlug}.com`;
+    }
+  }
+
   // 1. Check if provided URL has a direct company domain (strictly skip job aggregator boards)
   if (providedUrl) {
     try {
@@ -299,8 +361,17 @@ export async function resolveCompanyDomain(params: {
     );
     const list = JSON.parse(clearbitJson);
     if (Array.isArray(list) && list.length > 0) {
+      // Prioritize global .com over regional ccTLDs (like .com.au, .us, .co.uk, .com.sg)
+      const sortedList = [...list].sort((a, b) => {
+        const aDotCom = a.domain?.endsWith('.com') && !a.domain?.includes('.com.');
+        const bDotCom = b.domain?.endsWith('.com') && !b.domain?.includes('.com.');
+        if (aDotCom && !bDotCom) return -1;
+        if (!aDotCom && bDotCom) return 1;
+        return 0;
+      });
+
       // Look for candidate with matching whole word or exact name
-      const match = list.find((item) => {
+      const match = sortedList.find((item) => {
         if (!item.name) return false;
         const nameLower = item.name.toLowerCase();
         return (
@@ -308,9 +379,20 @@ export async function resolveCompanyDomain(params: {
           new RegExp(`\\b${cleanLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(nameLower)
         );
       });
-      if (match && match.domain && !isJobBoardDomain(match.domain) && (await verifyDomainMx(match.domain))) {
-        console.log(`[Domain Resolver] Clearbit Autocomplete resolved "${cleanCompany}" -> ${match.domain}`);
-        return match.domain;
+      if (match && match.domain && !isJobBoardDomain(match.domain)) {
+        let candidateDomain = match.domain.toLowerCase().trim();
+        // If candidate is a regional country domain (e.g. mastercard.com.au, amazon.co.uk),
+        // check if the global .com exists and has valid MX:
+        const strippedCom = candidateDomain.replace(/\.(com\.[a-z]{2}|co\.[a-z]{2}|us|au|uk|sg|nz|br)$/i, '.com');
+        if (strippedCom !== candidateDomain && (await verifyDomainMx(strippedCom))) {
+          console.log(`[Domain Resolver] Stripped regional suffix from Clearbit domain: ${candidateDomain} -> ${strippedCom}`);
+          return strippedCom;
+        }
+
+        if (await verifyDomainMx(candidateDomain)) {
+          console.log(`[Domain Resolver] Clearbit Autocomplete resolved "${cleanCompany}" -> ${candidateDomain}`);
+          return candidateDomain;
+        }
       }
     }
   } catch (_) {}
@@ -334,11 +416,6 @@ Return JSON only: {"domain": "exact_domain.com"}`;
   }
 
   // 5. Fallback slug deduction
-  const cleanSlug = cleanLower
-    .replace(/\b(inc|ltd|pvt|technologies|tech|solutions|corp|corporation|gmbh|llc|holdings|group)\b/gi, '')
-    .replace(/[^a-z0-9]/g, '')
-    .trim();
-
   if (!isJobBoardDomain(`${cleanSlug}.com`) && (await verifyDomainMx(`${cleanSlug}.com`))) return `${cleanSlug}.com`;
   if (!isJobBoardDomain(`${cleanSlug}.in`) && (await verifyDomainMx(`${cleanSlug}.in`))) return `${cleanSlug}.in`;
   return `${cleanSlug || 'company'}.com`;
@@ -1677,16 +1754,18 @@ Return JSON array:
     console.warn('[Contact Discovery] External API search skipped:', apiErr);
   }
 
-  // ── Source 4.5: Known Real Public Executives / Leadership (Anti-Hallucination) ──
+  // ── Source 4.5: Known Real Public Engineering Leads / Technical Hiring Managers (Anti-Hallucination) ──
   if (contacts.length < 4) {
     try {
-      const prompt = `Identify real, publicly verified current founders, CEO, CTO, or VP of Engineering for the company "${company}".
-CRITICAL: DO NOT make up fictional names. Only return real, verifiable executive leaders. If unknown, return [].
+      const prompt = `Identify real, publicly verified current Engineering Directors, VP of Engineering, Tech Leads, or Technical Talent Acquisition Leads for the company "${company}".
+CRITICAL GUIDELINES:
+1. NEVER return the global CEO, President, or Chairman of large enterprise / Fortune 500 companies (e.g. NEVER return Michael Miebach for Mastercard, Sundar Pichai for Google, Satya Nadella for Microsoft, Andy Jassy for Amazon). Those inboxes are closed to cold job applications and bounce.
+2. Only return real, verifiable Engineering Leaders (Director of Engineering, Engineering Manager, Tech Lead) or Senior Technical Recruiters. If unknown, return [].
 Return JSON array:
 [
   {
     "name": "Full Name",
-    "role": "Current Executive Title",
+    "role": "Current Technical Leadership / Recruiting Title",
     "contactType": "manager"
   }
 ]`;
@@ -1695,6 +1774,20 @@ Return JSON array:
       if (Array.isArray(parsed)) {
         for (const p of parsed.slice(0, 2)) {
           if (p.name && !p.name.includes('placeholder') && !p.name.includes('Example')) {
+            const nameLower = p.name.toLowerCase().trim();
+            const roleLower = (p.role || '').toLowerCase();
+            // Block global mega-cap CEOs and non-technical figureheads
+            if (
+              ENTERPRISE_CEO_BLACKLIST.has(nameLower) ||
+              roleLower.includes('chief executive') ||
+              roleLower === 'ceo' ||
+              roleLower.startsWith('ceo ') ||
+              roleLower.endsWith(' ceo')
+            ) {
+              console.log(`[Contact Discovery] Skipping enterprise CEO/figurehead: ${p.name} (${p.role})`);
+              continue;
+            }
+
             const email = buildEmailFromPattern(p.name, domain, learnedPattern);
             if (!seenEmails.has(email)) {
               seenEmails.add(email);
@@ -1709,8 +1802,8 @@ Return JSON array:
                 verified: isMxValid && patternConfirmed,
                 deliveryRisk: isMxValid && patternConfirmed ? 'safe' : 'unverified',
                 priorityLabel: patternConfirmed
-                  ? '🔵 Public Executive (Pattern-Confirmed Work Email)'
-                  : '⭐ Public Executive (Inferred Email - Verify on LinkedIn)',
+                  ? '🔵 Engineering Lead (Pattern-Confirmed Work Email)'
+                  : '⭐ Engineering Lead (Inferred Email - Verify on LinkedIn)',
                 confidence: patternConfirmed ? 'pattern_confirmed' : 'inferred_pattern',
                 source: 'corporate_channel',
               });
